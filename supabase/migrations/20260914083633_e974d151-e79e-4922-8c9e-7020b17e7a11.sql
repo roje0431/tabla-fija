@@ -1,0 +1,16 @@
+REVOKE ALL ON FUNCTION public.my_admin_id() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.my_admin_id() TO authenticated;
+REVOKE ALL ON FUNCTION public.is_my_player(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_my_player(uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.is_my_banquero(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_my_banquero(uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.can_view_race(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.can_view_race(uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.ticket_debit_balance() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.ticket_credit_payout() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.admin_set_banquero(uuid, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.admin_set_banquero(uuid, boolean) TO authenticated;
+REVOKE ALL ON FUNCTION public.set_player_balance(uuid, numeric, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_player_balance(uuid, numeric, text) TO authenticated;
+REVOKE ALL ON FUNCTION public.link_to_banquero(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.link_to_banquero(text) TO authenticated;
