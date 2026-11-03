@@ -107,9 +107,13 @@ jobs:
           SQL_TARGET="${{ inputs.sql_file }}"
 
           echo "Preparando archivo SQL para entorno Supabase..."
-          # Evitar errores si los esquemas o extensiones ya existen en el destino
-          sed -i 's/CREATE SCHEMA /CREATE SCHEMA IF NOT EXISTS /g' "$SQL_TARGET"
-          sed -i 's/CREATE EXTENSION /CREATE EXTENSION IF NOT EXISTS /g' "$SQL_TARGET"
+          
+          # Limpiar duplicados previos por seguridad
+          sed -i 's/IF NOT EXISTS IF NOT EXISTS/IF NOT EXISTS/g' "$SQL_TARGET"
+          
+          # Aplicar de forma segura solo si no contienen ya la cláusula
+          sed -i '/CREATE SCHEMA / { /IF NOT EXISTS/! s/CREATE SCHEMA /CREATE SCHEMA IF NOT EXISTS / }' "$SQL_TARGET"
+          sed -i '/CREATE EXTENSION / { /IF NOT EXISTS/! s/CREATE EXTENSION /CREATE EXTENSION IF NOT EXISTS / }' "$SQL_TARGET"
 
           echo "Ejecutando restauración con archivo: $SQL_TARGET"
           psql -d "$DB_URL" -v ON_ERROR_STOP=1 -f "$SQL_TARGET"
