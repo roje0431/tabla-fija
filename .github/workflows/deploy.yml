@@ -1,73 +1,111 @@
-name: Build Android APK
+name: Restaurar Base de Datos Supabase
 
 on:
-  repository_dispatch:
-    types: [build-apk]
   workflow_dispatch:
+    inputs:
+      sql_file:
+        description: 'Archivo SQL a ejecutar'
+        required: true
+        default: 'restauracion_completa.sql'
+        type: choice
+        options:
+          - restauracion_completa.sql
+          - 01_esquema_public.sql
+          - 02_datos_public.sql
+          - 00_auth_users.sql
 
 jobs:
-  build:
+  restore:
+    name: Restaurar en Supabase
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
+      - name: Descargar código del repositorio
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '21'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: npm install --legacy-peer-deps
-
-      - name: Prepare Mobile Assets (Fix White Screen)
+      - name: Validar existencia y contenido del archivo SQL
         run: |
-          # Ejecutar el script de preparación si existe
-          if [ -f "scripts/prepare-mobile.sh" ]; then
-            bash scripts/prepare-mobile.sh
-          else
-            npm run build
+          SQL_TARGET="${{ inputs.sql_file }}"
+
+          if [ ! -f "$SQL_TARGET" ]; then
+            echo "::error::El archivo '$SQL_TARGET' no se encuentra en la raíz del repositorio."
+            echo "::notice::Asegúrate de haber subido '$SQL_TARGET' y haber hecho 'git push' a la rama actual antes de ejecutar el workflow."
+            exit 1
           fi
 
-          mkdir -p dist/mobile
-
-          # Copiar los assets compilados del cliente
-          if [ -d "dist/client" ]; then
-            cp -r dist/client/* dist/mobile/
-          elif [ -d "dist" ]; then
-            cp -r dist/* dist/mobile/
+          if [ ! -s "$SQL_TARGET" ]; then
+            echo "::error::El archivo '$SQL_TARGET' existe pero está completamente vacío (0 bytes)."
+            echo "::notice::Verifica que el archivo contenga las sentencias SQL antes de ejecutar la restauración."
+            exit 1
           fi
 
-          # Ajustar rutas absolutas a relativas sin errores de sintaxis en sed (evita la pantalla blanca)
-          if [ -f "dist/mobile/index.html" ]; then
-            sed -i 's|href="/|href="./|g' dist/mobile/index.html
-            sed -i 's|src="/|src="./|g' dist/mobile/index.html
-          fi
+          FILE_SIZE=$(ls -lh "$SQL_TARGET" | awk '{print $5}')
+          TOTAL_LINES=$(wc -l < "$SQL_TARGET")
+          echo "✅ Archivo SQL validado: $SQL_TARGET ($FILE_SIZE, $TOTAL_LINES líneas)"
 
-          npx cap sync android
-
-      - name: Build APK with Gradle
+      - name: Instalar cliente PostgreSQL (psql)
         run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
 
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: animal-solutorres-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Validar y comprobar conexión con Supabase
+        env:
+          RAW_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$RAW_DB_URL" ]; then
+            echo "::error::Falta configurar el secret SUPABASE_DB_URL en Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+
+          # 1. Limpiar prefijo 'psql ', comillas y espacios accidentales
+          DB_URL=$(echo "$RAW_DB_URL" | sed -E 's/^[[:space:]]*psql[[:space:]]+//; s/^["'\'']//; s/["'\'']$//; s/^[[:space:]]+//; s/[[:space:]]+$//')
+
+          # 2. Validar formato de URI de PostgreSQL
+          if [[ ! "$DB_URL" =~ ^postgres(ql)?:// ]]; then
+            echo "::error::El secret SUPABASE_DB_URL no es una URI válida. Debe iniciar con 'postgresql://' o 'postgres://'."
+            echo "::notice::Ejemplo: postgresql://postgres.lgnmiawrjwrnkiabxlos:[PASSWORD]@aws-0-[region].pooler.supabase.com:6543/postgres"
+            exit 1
+          fi
+
+          # 3. Mostrar el destino saneado (sin la contraseña)
+          SANITIZED_TARGET=$(echo "$DB_URL" | sed -E 's|://([^:]+):[^@]+@|://\1:****@|')
+          echo "Verificando conexión hacia: $SANITIZED_TARGET"
+
+          # 4. Probar conexión activa ejecutando una consulta simple
+          TEST_OUTPUT=$(psql -d "$DB_URL" -c "SELECT 'Conexión exitosa a ' || current_database() || ' (PostgreSQL ' || split_part(version(), ' ', 2) || ')';" -t -A 2>&1)
+          TEST_STATUS=$?
+
+          if [ $TEST_STATUS -ne 0 ]; then
+            # Ocultar cualquier ocurrencia accidental de la contraseña en mensajes de error
+            CLEAN_ERROR=$(echo "$TEST_OUTPUT" | sed -E 's|:[^@/]+@|:****@|g')
+            
+            echo "::error::Falló la prueba de conexión a Supabase."
+            echo "------------------------------------------------------------------------"
+            echo "Detalle del error:"
+            echo "$CLEAN_ERROR"
+            echo "------------------------------------------------------------------------"
+            
+            if echo "$CLEAN_ERROR" | grep -qi "password authentication failed"; then
+              echo "::warning::Verifica la contraseña en SUPABASE_DB_URL. Si contiene caracteres especiales (@, #, %, !), deben estar codificados en URL."
+            elif echo "$CLEAN_ERROR" | grep -qi "could not translate host name"; then
+              echo "::warning::El nombre de host no se pudo resolver. Si usas db.[ref].supabase.co, ten en cuenta que es solo IPv6. Te recomendamos usar el Connection Pooler de Supabase (puerto 6543 o 5432)."
+            elif echo "$CLEAN_ERROR" | grep -qi "timeout"; then
+              echo "::warning::Tiempo de espera agotado al conectar. Asegúrate de usar el host del Connection Pooler (aws-0-[region].pooler.supabase.com)."
+            fi
+            
+            exit 1
+          fi
+
+          echo "✅ $TEST_OUTPUT"
+          echo "La conexión a la base de datos está verificada y lista para recibir la restauración."
+
+      - name: Ejecutar script de restauración
+        env:
+          RAW_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          DB_URL=$(echo "$RAW_DB_URL" | sed -E 's/^[[:space:]]*psql[[:space:]]+//; s/^["'\'']//; s/["'\'']$//; s/^[[:space:]]+//; s/[[:space:]]+$//')
+          SQL_TARGET="${{ inputs.sql_file }}"
+
+          echo "Ejecutando restauración con archivo: $SQL_TARGET"
+          psql -d "$DB_URL" -v ON_ERROR_STOP=1 -f "$SQL_TARGET"
+          echo "🎉 ¡Restauración completada con éxito en Supabase!"
