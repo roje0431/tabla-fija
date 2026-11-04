@@ -1,7 +1,7 @@
 /* eslint-disable */
 // @ts-nocheck
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useSession } from "@/hooks/useSession";
@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Plus, Trash2, X, ArrowLeft, Send, Wallet, RefreshCw, Shield, User, Landmark, Eye, CheckCircle2, MessageCircle, ShieldCheck, Lock } from "lucide-react";
+import { Plus, Trash2, X, ArrowLeft, Send, Wallet, RefreshCw, Shield, User, Landmark, Eye, CheckCircle2, MessageCircle, ShieldCheck, Lock, CreditCard, Printer, Ban, Calendar as CalendarIcon } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/apuestas-hipicas")({
@@ -34,6 +34,15 @@ function mensajeSaldo(error: unknown): string {
 
 function horaActualCaracas() {
   return new Intl.DateTimeFormat("en-GB", { timeZone: "America/Caracas", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+}
+
+function carreraMasCercana(carreras: { idprog: number; idhip?: string; hora: string | null; bloquea_ok: boolean | null }[], ahora = horaActualCaracas()) {
+  return carreras
+    .filter((c) => c.bloquea_ok === false && /^\d{2}:\d{2}/.test(String(c.hora ?? "")) && String(c.hora).slice(0, 5) > ahora)
+    .reduce<(typeof carreras)[number] | null>((proxima, c) => {
+      if (!proxima || String(c.hora).slice(0, 5) < String(proxima.hora).slice(0, 5)) return c;
+      return proxima;
+    }, null);
 }
 
 const ETIQUETA_ESTADO: Record<string, string> = {
@@ -72,7 +81,6 @@ function estadoTicket(estados: unknown[]): string {
   return "mixto";
 }
 
-
 function todayISO() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
   const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
@@ -87,14 +95,6 @@ function ApuestasHipicasPage() {
   const qc = useQueryClient();
   const { data: session, isLoading: sessionLoading } = useSession();
 
-  const [fecha] = useState(todayISO);
-  const [hip, setHip] = useState("");
-  const [idprog, setIdprog] = useState<number | null>(null);
-  const [caballo, setCaballo] = useState<Ejemplar | null>(null);
-  const [monto, setMonto] = useState("");
-  const [ticket, setTicket] = useState<Linea[]>([]);
-  const [ticketModalData, setTicketModalData] = useState<{ nroTicket: string; fecha: string; hora: string; lineas: Linea[]; total: number } | null>(null);
-
   const rawRole = 
     session?.role || 
     session?.profile?.role || 
@@ -104,9 +104,28 @@ function ApuestasHipicasPage() {
   const role = String(rawRole).toLowerCase();
   const userId = session?.userId || session?.profile?.id;
   const isBanquero = role === "banquero";
+  const isAdmin = role === "admin" || role === "superadmin";
+  const isJugador = !isBanquero && !isAdmin;
+
+  const [fecha, setFecha] = useState(todayISO);
+  const [hip, setHip] = useState("");
+  const [idprog, setIdprog] = useState<number | null>(null);
+  const [caballo, setCaballo] = useState<Ejemplar | null>(null);
+  const [monto, setMonto] = useState("");
+  const [ticket, setTicket] = useState<Linea[]>([]);
+  const [ticketModalData, setTicketModalData] = useState<{ nroTicket: string; fecha: string; hora: string; lineas: Linea[]; total: number; metodoPago: string } | null>(null);
+
+  const [metodoPago, setMetodoPago] = useState<string>(isJugador ? "saldo" : "efectivo");
+
+  // Forzar método de pago a "saldo" si es jugador
+  useEffect(() => {
+    if (isJugador) {
+      setMetodoPago("saldo");
+    }
+  }, [isJugador]);
 
   const returnTarget = (() => {
-    if (role === "admin" || role === "superadmin") {
+    if (isAdmin) {
       return { to: "/carreras", label: "VOLVER A CARRERAS", icon: Shield, badge: "ADMIN" };
     }
     if (isBanquero) {
@@ -155,7 +174,29 @@ function ApuestasHipicasPage() {
   const hipodromos = hipQuery.data ?? [];
   const hipSel = hipodromos.find((h) => h.idhip === hip);
 
-  // LÍMITES PERSONALES DEL JUGADOR PARA GANADORES (WIN)
+  const carreraInicialQuery = useQuery({
+    enabled: !hip && hipodromos.length > 0,
+    queryKey: ["apuestas-carrera-inicial-win", fecha, hipodromos.map((h) => h.idhip)],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("programa")
+        .select("idprog, idhip, hora, bloquea_ok")
+        .eq("fecha", fecha)
+        .eq("bloquea_ok", false)
+        .in("idhip", hipodromos.map((h) => h.idhip));
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+  useEffect(() => {
+    if (hip || !carreraInicialQuery.data) return;
+    const proxima = carreraMasCercana(carreraInicialQuery.data);
+    if (!proxima?.idhip) return;
+    setHip(proxima.idhip);
+    setIdprog(proxima.idprog);
+    setCaballo(null);
+  }, [hip, carreraInicialQuery.data]);
+
   const isInternacional = hipSel?.tipo === 1;
   const limiteWinCarrera = Number(
     isInternacional
@@ -170,27 +211,32 @@ function ApuestasHipicasPage() {
 
   const { data: misTickets = [], refetch: refetchMisTickets } = useQuery({
     enabled: !!userId,
-    queryKey: ["mis-apuestas-win-user-or-banquero", userId, isBanquero],
+    queryKey: ["mis-apuestas-win-user-or-banquero", userId, isBanquero, isAdmin],
     queryFn: async () => {
       let targetUserIds = [userId];
 
-      if (isBanquero) {
-        const { data: jugadores, error: errJug } = await supabase
-          .from("profiles")
-          .select("id")
-          .eq("banquero_id", userId);
+      if (isBanquero || isAdmin) {
+        const queryJug = supabase.from("profiles").select("id");
+        if (isBanquero) {
+          queryJug.eq("banquero_id", userId);
+        }
+        const { data: jugadores, error: errJug } = await queryJug;
 
         if (!errJug && jugadores && jugadores.length > 0) {
-          targetUserIds = [...targetUserIds, ...jugadores.map((j) => j.id)];
+          targetUserIds = Array.from(new Set([...targetUserIds, ...jugadores.map((j) => j.id)]));
         }
       }
 
-      const { data, error } = await supabase
+      const queryApuestas = supabase
         .from("apuestas_win")
         .select("nroticket, fecha, carrera, nroejem, monto, status, monto_pagar, created_at, idhip, user_id")
-        .in("user_id", targetUserIds)
         .order("created_at", { ascending: false });
 
+      if (!isAdmin) {
+        queryApuestas.in("user_id", targetUserIds);
+      }
+
+      const { data, error } = await queryApuestas;
       if (error) throw error;
 
       const { data: hipsData } = await supabase.from("hipodromos").select("idhip, nomhip");
@@ -212,6 +258,7 @@ function ApuestasHipicasPage() {
             idhip: row.idhip,
             carrera: row.carrera,
             fecha: row.fecha,
+            user_id: row.user_id,
             hora: row.created_at ? new Date(row.created_at).toLocaleTimeString() : "--:--:--",
             total: 0,
             pagadoTotal: 0,
@@ -241,7 +288,6 @@ function ApuestasHipicasPage() {
         ...t,
         status: estadoTicket(t.estados),
       }));
-
     },
   });
 
@@ -252,7 +298,7 @@ function ApuestasHipicasPage() {
       if (!hip) return [];
       const { data, error } = await supabase
         .from("programa")
-        .select("idprog, carrera, hora, bloquea_ok")
+        .select("idprog, carrera, hora, bloquea_ok, cabgan, div_oficial, divgan")
         .eq("idhip", hip)
         .eq("fecha", fecha)
         .order("carrera");
@@ -285,6 +331,14 @@ function ApuestasHipicasPage() {
   const carreraSel = carreras.find((c) => c.idprog === idprog);
   const carreraEstaCerrada = Boolean(carreraSel?.cerrada);
 
+  useEffect(() => {
+    if (!hip || idprog !== null || !carrerasQuery.data) return;
+    const proxima = carreraMasCercana(carrerasQuery.data);
+    if (!proxima) return;
+    setIdprog(proxima.idprog);
+    setCaballo(null);
+  }, [hip, idprog, carrerasQuery.data]);
+
   const montoNum = Number(monto);
   const total = ticket.reduce((sum, linea) => sum + linea.monto, 0);
 
@@ -296,7 +350,8 @@ function ApuestasHipicasPage() {
 
   const enviarTicketWhatsApp = (ticketData: any) => {
     let texto = `*TICKET HÍPICO WIN #${ticketData.nroTicket}*\n`;
-    texto += `Fecha: ${ticketData.fecha} - ${ticketData.hora}\n\n`;
+    texto += `Fecha: ${ticketData.fecha} - ${ticketData.hora}\n`;
+    texto += `Método de Pago: ${ticketData.metodoPago.toUpperCase()}\n\n`;
     ticketData.lineas.forEach((l: any) => {
       texto += `📌 ${l.hip} (${l.carrera}ª) -> #${l.nro} ${l.nombre}: Bs. ${fmt.format(l.monto)}\n`;
     });
@@ -304,6 +359,82 @@ function ApuestasHipicasPage() {
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(texto)}`;
     window.open(url, "_blank");
   };
+
+  const imprimirTicket = () => {
+    window.print();
+  };
+
+  const anularTicketMutation = useMutation({
+    mutationFn: async (ticketObj: { nroticket: string; idhip: string; fecha: string; lineas: any[]; total: number; user_id: string }) => {
+      if (!isBanquero && !isAdmin) {
+        throw new Error("No tienes permisos para anular tickets.");
+      }
+
+      const carrerasTicket = Array.from(new Set(ticketObj.lineas.map((l) => l.carrera)));
+      const { data: progCheck, error: progErr } = await supabase
+        .from("programa")
+        .select("idprog, carrera, hora, bloquea_ok")
+        .eq("idhip", ticketObj.idhip)
+        .eq("fecha", ticketObj.fecha)
+        .in("carrera", carrerasTicket);
+
+      if (progErr) throw new Error("Error al verificar el estatus de las carreras.");
+
+      const ahora = horaActualCaracas();
+      for (const p of progCheck ?? []) {
+        const horaCierre = String(p.hora ?? "").slice(0, 5);
+        const vencida = horaCierre.length === 5 && horaCierre <= ahora;
+        const estaCerrada = Boolean(p.bloquea_ok) || vencida;
+        if (estaCerrada) {
+          throw new Error(`La ${p.carrera}ª carrera ya está cerrada o bloqueada. No se puede anular el ticket.`);
+        }
+      }
+
+      const { error: updateApuestaErr } = await supabase
+        .from("apuestas_win")
+        .update({ status: "cancelado" })
+        .eq("nroticket", ticketObj.nroticket);
+
+      if (updateApuestaErr) throw updateApuestaErr;
+
+      const { data: profJugador, error: profErr } = await supabase
+        .from("profiles")
+        .select("balance")
+        .eq("id", ticketObj.user_id)
+        .single();
+
+      if (!profErr && profJugador) {
+        const saldoActualJugador = Number(profJugador.balance ?? 0);
+        const nuevoSaldoJugador = saldoActualJugador + ticketObj.total;
+
+        await supabase
+          .from("profiles")
+          .update({ balance: nuevoSaldoJugador })
+          .eq("id", ticketObj.user_id);
+      }
+
+      await supabase.from("movimientos").insert({
+        player_id: ticketObj.user_id,
+        banquero_id: userId,
+        tipo: "reembolso",
+        monto: ticketObj.total,
+        descripcion: `Anulación de Ticket Hípico #${ticketObj.nroticket}`,
+        estado: "completado",
+        created_at: new Date().toISOString(),
+      });
+
+      return ticketObj.nroticket;
+    },
+    onSuccess: (nroticket) => {
+      toast.success(`¡Ticket #${nroticket} anulado con éxito y saldo reembolsado!`);
+      qc.invalidateQueries({ queryKey: ["user-profile-saldo-win"] });
+      qc.invalidateQueries({ queryKey: ["mis-apuestas-win-user-or-banquero"] });
+      qc.invalidateQueries({ queryKey: ["movimientos-tabla"] });
+    },
+    onError: (e: Error) => {
+      toast.error(e.message || "Error al anular el ticket");
+    },
+  });
 
   const miMontoWinCarrera = useMemo(() => {
     if (!hip || !carreraSel) return 0;
@@ -394,6 +525,14 @@ function ApuestasHipicasPage() {
   const procesarTicketMutation = useMutation({
     mutationFn: async () => {
       if (!userId) throw new Error("Usuario no autenticado.");
+      
+      // REFRESCAR SALDO Y DATOS DE CARRERAS ANTES DE VALIDAR Y REGISTRAR LA JUGADA
+      await Promise.all([
+        refetchSaldo(),
+        carrerasQuery.refetch(),
+        refetchMisTickets(),
+      ]);
+
       if (!saldoVerificado) throw new Error(saldoError ? mensajeSaldo(saldoError) : "Actualiza el saldo antes de confirmar.");
       if (ticket.length === 0) throw new Error("El ticket está vacío.");
 
@@ -427,7 +566,7 @@ function ApuestasHipicasPage() {
       }
       const saldoActual = Number(profData.balance);
 
-      if (saldoActual < total) {
+      if (!isBanquero && !isAdmin && saldoActual < total) {
         throw new Error(`Saldo insuficiente. Tu saldo actual es Bs. ${fmt.format(saldoActual)} y el ticket es de Bs. ${fmt.format(total)}.`);
       }
 
@@ -447,7 +586,7 @@ function ApuestasHipicasPage() {
         banquero_id: profData.banquero_id || banqueroIdUsuario || null,
         tipo: "jugada",
         monto: total,
-        descripcion: `Apuesta Hípica Win - Ticket #${nroTicket}`,
+        descripcion: `Apuesta Hípica Win - Ticket #${nroTicket} [Pago: ${metodoPago.toUpperCase()}]`,
         estado: "completado",
         created_at: new Date().toISOString(),
       };
@@ -472,7 +611,7 @@ function ApuestasHipicasPage() {
       const { error: insertErr } = await supabase.from("apuestas_win").insert(jugadasToInsert);
       if (insertErr) throw insertErr;
 
-      return { nroTicket, fecha, hora: horaActual, lineas: [...ticket], total, nuevoSaldo };
+      return { nroTicket, fecha, hora: horaActual, lineas: [...ticket], total, nuevoSaldo, metodoPago };
     },
     onSuccess: (data) => {
       toast.success(`¡Ticket #${data.nroTicket} procesado con éxito!`);
@@ -482,6 +621,7 @@ function ApuestasHipicasPage() {
         hora: data.hora,
         lineas: data.lineas,
         total: data.total,
+        metodoPago: data.metodoPago,
       });
       setTicket([]);
       qc.invalidateQueries({ queryKey: ["user-profile-saldo-win"] });
@@ -519,7 +659,42 @@ function ApuestasHipicasPage() {
 
   return (
     <div className="min-h-screen bg-black text-slate-100 p-3 sm:p-5">
-      <div className="container mx-auto max-w-6xl space-y-5">
+      
+      <style>{`
+        @media print {
+          @page {
+            margin: 0;
+            size: 58mm auto;
+          }
+          body, html {
+            background: white !important;
+            color: black !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          body * {
+            visibility: hidden;
+          }
+          #print-section-ticket, #print-section-ticket * {
+            visibility: visible;
+          }
+          #print-section-ticket {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 54mm !important;
+            max-width: 54mm !important;
+            margin: 0 !important;
+            padding: 1mm 2mm 3mm 2mm !important;
+            background: white !important;
+            color: black !important;
+            box-shadow: none !important;
+            border: none !important;
+          }
+        }
+      `}</style>
+
+      <div className="container mx-auto max-w-6xl space-y-5 print:hidden">
         
         <div className="flex flex-wrap gap-2 items-center justify-between border-b border-[#00ff66]/30 pb-3">
           <div className="flex items-center gap-2">
@@ -576,8 +751,7 @@ function ApuestasHipicasPage() {
           </p>
         </div>
 
-        {/* PANEL INFORMATIVO DE LÍMITES PERSONALES EN GANADORES */}
-        {!isBanquero && userId && (
+        {!isBanquero && !isAdmin && userId && (
           <div className="rounded-xl border border-[#00ff66]/30 bg-[#060a08] p-4 text-xs space-y-2 font-mono shadow-[0_0_15px_rgba(0,255,102,0.06)]">
             <div className="flex items-center gap-2 text-[#00ff66] font-bold border-b border-[#00ff66]/20 pb-1.5">
               <ShieldCheck className="h-4 w-4 text-[#00ff66]" />
@@ -606,8 +780,32 @@ function ApuestasHipicasPage() {
           </div>
         )}
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:gap-5">
+          
+          {(isAdmin || isBanquero) && (
+            <div className="space-y-1.5 lg:w-[220px] lg:shrink-0">
+              <Label htmlFor="win-fecha" className="text-xs uppercase font-bold tracking-wider text-[#00ff66] flex items-center gap-1.5">
+                <CalendarIcon className="h-3.5 w-3.5" /> Fecha Carrera
+              </Label>
+              <div className="relative">
+                <Input
+                  id="win-fecha"
+                  type="date"
+                  value={fecha}
+                  onChange={(e) => {
+                    setFecha(e.target.value);
+                    setHip("");
+                    setIdprog(null);
+                    setCaballo(null);
+                  }}
+                  className="h-11 bg-[#060a08] border border-[#00ff66]/40 text-white text-sm focus:border-[#00ff66] focus:ring-1 focus:ring-[#00ff66] pr-9 shadow-[0_0_10px_rgba(0,255,102,0.05)]"
+                />
+                <CalendarIcon className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#00ff66] pointer-events-none" />
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1.5 lg:w-[280px] lg:shrink-0">
             <Label htmlFor="win-hip" className="text-xs uppercase font-bold tracking-wider text-[#00ff66]">
               Hipódromo
             </Label>
@@ -618,7 +816,7 @@ function ApuestasHipicasPage() {
               className="h-11 w-full rounded-lg border border-[#00ff66]/40 bg-[#060a08] px-3 text-sm text-white focus:border-[#00ff66] focus:outline-none focus:ring-1 focus:ring-[#00ff66] shadow-[0_0_10px_rgba(0,255,102,0.05)]"
             >
               <option value="" className="bg-[#060a08] text-slate-300">
-                {hipQuery.isLoading ? "Cargando hipódromos..." : hipodromos.length ? "Selecciona hipódromo" : "Sin carreras hoy"}
+                {hipQuery.isLoading ? "Cargando hipódromos..." : hipodromos.length ? "Selecciona hipódromo" : "Sin carreras en esta fecha"}
               </option>
               {hipodromos.map((h) => (
                 <option key={h.idhip} value={h.idhip} className="bg-[#060a08] text-white">
@@ -628,26 +826,41 @@ function ApuestasHipicasPage() {
             </select>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="win-carrera" className="text-xs uppercase font-bold tracking-wider text-[#00ff66]">
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <Label className="text-xs uppercase font-bold tracking-wider text-[#00ff66]">
               Carrera
             </Label>
-            <select
-              id="win-carrera"
-              value={idprog ?? ""}
-              disabled={!hip}
-              onChange={(e) => { setIdprog(e.target.value ? Number(e.target.value) : null); setCaballo(null); }}
-              className="h-11 w-full rounded-lg border border-[#00ff66]/40 bg-[#060a08] px-3 text-sm text-white focus:border-[#00ff66] focus:outline-none focus:ring-1 focus:ring-[#00ff66] disabled:opacity-40 shadow-[0_0_10px_rgba(0,255,102,0.05)]"
-            >
-              <option value="" className="bg-[#060a08] text-slate-300">
-                {carrerasQuery.isLoading ? "Cargando carreras..." : hip && !carreras.length ? "Sin carreras abiertas" : "Selecciona carrera"}
-              </option>
-              {carreras.map((c) => (
-                <option key={c.idprog} value={c.idprog} className="bg-[#060a08] text-white">
-                  {c.carrera}ª Carrera {c.hora ? `· ${c.hora}` : ""} {c.cerrada ? "(CERRADA)" : ""}
-                </option>
-              ))}
-            </select>
+            <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-9" role="group" aria-label="Carreras del día">
+              {carrerasQuery.isLoading ? (
+                <span className="col-span-full text-sm text-slate-400">Cargando carreras...</span>
+              ) : !hip ? (
+                <span className="col-span-full text-sm text-slate-400">Selecciona hipódromo</span>
+              ) : !carreras.length ? (
+                <span className="col-span-full text-sm text-slate-400">Sin carreras abiertas</span>
+              ) : (
+                carreras.map((c) => {
+                  const activa = c.idprog === idprog;
+                  return (
+                    <button
+                      key={c.idprog}
+                      type="button"
+                      title={`${c.carrera}ª Carrera${c.hora ? ` · ${c.hora}` : ""}${c.cerrada ? " (CERRADA)" : ""}`}
+                      aria-pressed={activa}
+                      onClick={() => { setIdprog(c.idprog); setCaballo(null); }}
+                      className={`h-9 rounded-md border text-xs font-bold transition-colors ${
+                        activa
+                          ? "border-[#fbbf24] bg-[#fbbf24] text-black shadow-[0_0_10px_rgba(251,191,36,0.25)]"
+                          : c.cerrada
+                            ? "border-slate-700 bg-[#060a08] text-slate-500 line-through"
+                            : "border-slate-700 bg-[#060a08] text-slate-300 hover:border-[#fbbf24]/60 hover:text-white"
+                      }`}
+                    >
+                      C{c.carrera}
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
 
@@ -684,6 +897,22 @@ function ApuestasHipicasPage() {
                     <div className="mb-3 rounded-lg border border-red-500/40 bg-red-950/40 p-2.5 text-center text-xs font-bold text-red-400 flex items-center justify-center gap-1.5">
                       <Lock className="h-4 w-4" />
                       Esta carrera está cerrada.
+                    </div>
+                  )}
+                  {carreraEstaCerrada && carreraSel?.cabgan && (
+                    <div className="mb-3 grid grid-cols-3 gap-2 rounded-lg border border-[#00ff66]/40 bg-[#00ff66]/5 p-2.5 text-center text-xs font-mono">
+                      <div>
+                        <div className="text-[10px] uppercase text-[#00ff66]/70">Caballo Ganador</div>
+                        <div className="font-bold text-[#00ff66]">#{carreraSel.cabgan}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-[#00ff66]/70">Dividendo Oficial</div>
+                        <div className="font-bold text-slate-100">{carreraSel.div_oficial != null ? Number(carreraSel.div_oficial).toFixed(2) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase text-[#00ff66]/70">Dividendo Final</div>
+                        <div className="font-bold text-amber-300">{carreraSel.divgan != null ? Number(carreraSel.divgan).toFixed(2) : "—"}</div>
+                      </div>
                     </div>
                   )}
                   <table className="w-full min-w-[280px] text-sm">
@@ -843,7 +1072,33 @@ function ApuestasHipicasPage() {
                 />
               </div>
 
-              {/* ADVERTENCIAS DE LÍMITES */}
+              <div className="space-y-1.5 pt-1 border-t border-[#00ff66]/20">
+                <Label htmlFor="metodo-pago" className="text-xs uppercase font-bold tracking-wider text-[#00ff66] flex items-center gap-1.5">
+                  <CreditCard className="h-3.5 w-3.5" /> Método de Pago:
+                </Label>
+                <select
+                  id="metodo-pago"
+                  value={metodoPago}
+                  disabled={isJugador}
+                  onChange={(e) => setMetodoPago(e.target.value)}
+                  className="h-11 w-full rounded-lg border border-[#00ff66]/40 bg-black px-3 text-sm text-white focus:border-[#00ff66] focus:outline-none focus:ring-1 focus:ring-[#00ff66] disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  <optgroup label="Seleccione forma de pago" className="bg-[#060a08] text-[#00ff66]">
+                    <option value="saldo">💰 Saldo (Cuenta)</option>
+                    <option value="efectivo">💵 Efectivo</option>
+                    <option value="pago_movil">📱 Pago Móvil</option>
+                    <option value="divisa">💲 Divisa</option>
+                    <option value="bio_pago">💳 Bio Pago</option>
+                    <option value="transferencia">🏦 Transferencia</option>
+                  </optgroup>
+                </select>
+                {isJugador && (
+                  <span className="text-[10px] text-slate-400 block mt-1">
+                    🔒 Las apuestas de jugadores se descuentan directamente del saldo disponible.
+                  </span>
+                )}
+              </div>
+
               {excederiaLimiteCarrera && (
                 <p className="text-xs font-bold text-rose-400">
                   ⚠️ Superas tu límite personal de Ganadores por carrera (Máx: Bs. {fmt.format(limiteWinCarrera)})
@@ -901,7 +1156,7 @@ function ApuestasHipicasPage() {
               <Button
                 size="lg"
                 className="w-full h-12 bg-[#00ff66] hover:bg-[#00e65c] text-black font-black uppercase tracking-wider shadow-[0_0_20px_rgba(0,255,102,0.35)] transition-all disabled:opacity-40"
-                disabled={ticket.length === 0 || procesarTicketMutation.isPending || !saldoVerificado || total > saldoDisponible}
+                disabled={ticket.length === 0 || procesarTicketMutation.isPending || !saldoVerificado || (!isBanquero && !isAdmin && total > saldoDisponible)}
                 onClick={() => procesarTicketMutation.mutate()}
               >
                 <Send className="w-4 h-4 mr-2" />
@@ -909,7 +1164,7 @@ function ApuestasHipicasPage() {
                   ? "PROCESANDO..."
                   : !saldoVerificado
                   ? "VERIFICANDO SALDO..."
-                  : total > saldoDisponible
+                  : !isBanquero && !isAdmin && total > saldoDisponible
                   ? "SALDO INSUFICIENTE"
                   : "CONFIRMAR Y DESCONTAR TICKET"}
               </Button>
@@ -919,19 +1174,20 @@ function ApuestasHipicasPage() {
                   ? "Verificando saldo disponible..."
                   : ticket.length === 0
                   ? "Agrega al menos una apuesta para registrar el ticket."
-                  : total > saldoDisponible
+                  : !isBanquero && !isAdmin && total > saldoDisponible
                   ? `Te faltan Bs. ${fmt.format(total - saldoDisponible)} para confirmar este ticket.`
+                  : isBanquero || isAdmin
+                  ? "Modo Operador: Venta permitida sin restricción de saldo."
                   : "Haz clic para registrar el ticket y descontar de tu saldo."}
               </p>
             </CardContent>
           </Card>
         </div>
 
-        {/* LISTADO DE TICKETS JUGADOS */}
         <Card className="bg-[#060a08] border border-[#00ff66]/30 shadow-[0_0_20px_rgba(0,255,102,0.08)] rounded-xl mt-8">
           <CardHeader className="border-b border-[#00ff66]/20 pb-3">
             <CardTitle className="text-base font-bold text-[#00ff66]">
-              {isBanquero ? "Tickets de Jugadores Asignados" : "Mis Tickets Jugados"}
+              {isBanquero || isAdmin ? "Tickets Registrados (Gestión de Anulación)" : "Mis Tickets Jugados"}
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-4">
@@ -950,46 +1206,76 @@ function ApuestasHipicasPage() {
                       <th className="py-2.5 px-3">Jugadas</th>
                       <th className="py-2.5 px-3 text-center">Estado</th>
                       <th className="py-2.5 px-3 text-right">Total (Bs.)</th>
-                      <th className="py-2.5 px-3 text-center">Ver</th>
+                      <th className="py-2.5 px-3 text-center">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#00ff66]/15">
-                    {misTickets.map((t) => (
-                      <tr key={t.nroticket} className="hover:bg-[#00ff66]/5 transition-colors">
-                        <td className="py-3 px-3 font-mono font-bold text-[#00ff66]">{t.nroticket}</td>
-                        <td className="py-3 px-3 font-mono text-slate-300">{t.fecha}</td>
-                        <td className="py-3 px-3 font-mono text-slate-300">{t.hora}</td>
-                        <td className="py-3 px-3 text-slate-200">{t.lineas.length} jugada(s)</td>
-                        <td className="py-3 px-3 text-center">
-                          <span
-                            className={`inline-block rounded-full border px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide ${
-                              ESTILO_ESTADO[t.status] ?? ESTILO_ESTADO.pendiente
-                            }`}
-                          >
-                            {ETIQUETA_ESTADO[t.status] ?? t.status}
-                          </span>
-                        </td>
+                    {misTickets.map((t) => {
+                      const puedeAnular = (isBanquero || isAdmin) && t.status !== "cancelado";
+                      return (
+                        <tr key={t.nroticket} className="hover:bg-[#00ff66]/5 transition-colors">
+                          <td className="py-3 px-3 font-mono font-bold text-[#00ff66]">{t.nroticket}</td>
+                          <td className="py-3 px-3 font-mono text-slate-300">{t.fecha}</td>
+                          <td className="py-3 px-3 font-mono text-slate-300">{t.hora}</td>
+                          <td className="py-3 px-3 text-slate-200">{t.lineas.length} jugada(s)</td>
+                          <td className="py-3 px-3 text-center">
+                            <span
+                              className={`inline-block rounded-full border px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide ${
+                                ESTILO_ESTADO[t.status] ?? ESTILO_ESTADO.pendiente
+                              }`}
+                            >
+                              {ETIQUETA_ESTADO[t.status] ?? t.status}
+                            </span>
+                          </td>
 
-                        <td className="py-3 px-3 text-right font-mono font-bold text-white">{fmt.format(t.total)}</td>
-                        <td className="py-3 px-3 text-center">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8 text-[#00ff66] hover:bg-[#00ff66]/20"
-                            title="Ver ticket"
-                            onClick={() => setTicketModalData({
-                              nroTicket: t.nroticket,
-                              fecha: t.fecha,
-                              hora: t.hora,
-                              lineas: t.lineas.map(l => ({ id: crypto.randomUUID(), idprog: 0, idhip: "", hip: l.hip || "HÍPICO", carrera: l.carrera, nro: l.nro, nombre: l.nombre || `Ejemplar #${l.nro}`, monto: l.monto })),
-                              total: t.total,
-                            })}
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
+                          <td className="py-3 px-3 text-right font-mono font-bold text-white">{fmt.format(t.total)}</td>
+                          <td className="py-3 px-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 text-[#00ff66] hover:bg-[#00ff66]/20"
+                                title="Ver ticket"
+                                onClick={() => setTicketModalData({
+                                  nroTicket: t.nroticket,
+                                  fecha: t.fecha,
+                                  hora: t.hora,
+                                  lineas: t.lineas.map(l => ({ id: crypto.randomUUID(), idprog: 0, idhip: t.idhip || "", hip: l.hip || "HÍPICO", carrera: l.carrera, nro: l.nro, nombre: l.nombre || `Ejemplar #${l.nro}`, monto: l.monto })),
+                                  total: t.total,
+                                  metodoPago: "saldo",
+                                })}
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+
+                              {puedeAnular && (
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8 text-rose-400 hover:bg-rose-950/50 hover:text-rose-300"
+                                  title="Anular Ticket y Reembolsar Saldo"
+                                  disabled={anularTicketMutation.isPending}
+                                  onClick={() => {
+                                    if (window.confirm(`¿Estás seguro de anular el Ticket #${t.nroticket} por Bs. ${fmt.format(t.total)}? Se reembolsará el saldo al jugador.`)) {
+                                      anularTicketMutation.mutate({
+                                        nroticket: t.nroticket,
+                                        idhip: t.idhip,
+                                        fecha: t.fecha,
+                                        lineas: t.lineas,
+                                        total: t.total,
+                                        user_id: t.user_id,
+                                      });
+                                    }
+                                  }}
+                                >
+                                  <Ban className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -999,12 +1285,11 @@ function ApuestasHipicasPage() {
 
       </div>
 
-      {/* MODAL DE COMPROBANTE TÉRMICO */}
       {ticketModalData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-md rounded-2xl bg-white text-black p-6 shadow-2xl space-y-4 font-mono">
             
-            <div className="flex items-center justify-between border-b pb-3">
+            <div className="flex items-center justify-between border-b pb-3 print:hidden">
               <div className="flex items-center gap-2 text-emerald-600 font-bold">
                 <CheckCircle2 className="h-6 w-6" />
                 <span>Comprobante de Ticket</span>
@@ -1019,60 +1304,70 @@ function ApuestasHipicasPage() {
               </Button>
             </div>
 
-            <div className="rounded-xl border border-dashed border-slate-400 bg-slate-50 p-4 space-y-3 text-xs">
-              <div className="flex justify-between font-bold text-sm">
+            <div id="print-section-ticket" className="mx-auto w-[54mm] rounded-xl border border-dashed border-slate-400 bg-slate-50 p-3 space-y-2 text-[11px] font-mono leading-tight">
+              <div className="flex justify-between font-bold text-xs">
                 <span>TICKET:</span>
                 <span>{ticketModalData.nroTicket}</span>
               </div>
-              <div className="flex justify-between text-[11px] text-slate-600 border-b pb-2">
+              <div className="flex justify-between text-[10px] text-slate-600 border-b pb-1.5">
                 <span>FECHA: {ticketModalData.fecha}</span>
                 <span>HORA: {ticketModalData.hora}</span>
               </div>
 
-              <div className="text-center font-bold text-slate-800 tracking-wider py-1">
+              <div className="text-center font-bold text-slate-900 tracking-wider py-0.5">
                 TABLA FIJA SOLUTORRES<br />
                 APUESTAS HÍPICAS (WIN)
               </div>
 
-              <div className="border-t border-b border-dashed border-slate-300 py-2 space-y-2">
+              <div className="text-[10px] font-bold text-center text-slate-800 bg-slate-200 py-0.5 rounded uppercase">
+                PAGO: {ticketModalData.metodoPago}
+              </div>
+
+              <div className="border-t border-b border-dashed border-slate-300 py-1.5 space-y-1.5">
                 {ticketModalData.lineas.map((l, idx) => (
-                  <div key={idx} className="space-y-0.5 border-b border-slate-200 pb-1.5 last:border-b-0 last:pb-0">
-                    <div className="font-bold text-emerald-800 uppercase">
-                      📌 {l.hip} — {l.carrera}ª CARRERA
+                  <div key={idx} className="space-y-0.5 border-b border-slate-200 pb-1 last:border-b-0 last:pb-0">
+                    <div className="font-bold text-emerald-900 uppercase">
+                      📌 {l.hip} — {l.carrera}ª C.
                     </div>
-                    <div className="flex justify-between items-center text-slate-800">
-                      <span>• #{l.nro} {l.nombre}</span>
-                      <span className="font-bold text-black">{fmt.format(l.monto)}</span>
+                    <div className="flex justify-between items-start text-slate-900 gap-1">
+                      <span className="break-words">• #{l.nro} {l.nombre}</span>
+                      <span className="font-bold text-black shrink-0">{fmt.format(l.monto)}</span>
                     </div>
                   </div>
                 ))}
               </div>
 
-              <div className="space-y-1 pt-1">
+              <div className="space-y-0.5 pt-0.5 text-[10px]">
                 <div className="flex justify-between text-slate-600">
-                  <span>({ticketModalData.lineas.length} JUGADAS) SUBTOTAL BS.</span>
+                  <span>({ticketModalData.lineas.length} JUGADAS) SUB:</span>
                   <span>{fmt.format(ticketModalData.total)}</span>
                 </div>
-                <div className="flex justify-between font-bold text-sm border-t border-slate-300 pt-1">
-                  <span>TOTAL BS.</span>
+                <div className="flex justify-between font-bold text-xs border-t border-slate-300 pt-0.5 text-black">
+                  <span>TOTAL BS.:</span>
                   <span>{fmt.format(ticketModalData.total)}</span>
                 </div>
               </div>
 
-              <div className="text-center text-[10px] text-slate-400 pt-2 font-mono">
-                CONTROL: {Math.random().toString(36).substring(2, 15).toUpperCase()}
+              <div className="text-center text-[9px] text-slate-400 pt-1 font-mono">
+                CONTROL: {Math.random().toString(36).substring(2, 12).toUpperCase()}
               </div>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 print:hidden">
               <Button
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold uppercase py-3 rounded-xl shadow-lg"
-                onClick={() => enviarTicketWhatsApp(ticketModalData)}
+                className="flex-1 bg-sky-600 hover:bg-sky-700 text-white font-bold uppercase py-3 rounded-xl shadow-lg text-xs"
+                onClick={imprimirTicket}
               >
-                <MessageCircle className="w-4 h-4 mr-2" /> WhatsApp
+                <Printer className="w-4 h-4 mr-1.5" /> Imprimir Tickera
               </Button>
               <Button
-                className="flex-1 bg-slate-800 hover:bg-slate-900 text-white font-bold uppercase py-3 rounded-xl shadow-lg"
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold uppercase py-3 rounded-xl shadow-lg text-xs"
+                onClick={() => enviarTicketWhatsApp(ticketModalData)}
+              >
+                <MessageCircle className="w-4 h-4 mr-1.5" /> WhatsApp
+              </Button>
+              <Button
+                className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold uppercase py-2.5 rounded-xl shadow-lg text-xs"
                 onClick={() => setTicketModalData(null)}
               >
                 Cerrar
