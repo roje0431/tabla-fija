@@ -1,10 +1,10 @@
 /* eslint-disable */
 // @ts-nocheck
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { Calendar, ArrowLeft, Lock, Unlock, Printer, Share2 } from "lucide-react";
+import { Calendar, ArrowLeft, Lock, Unlock, Printer, Share2, DollarSign, CheckCircle2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatBs } from "@/lib/format";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/panel")({
+export const Route = createFileRoute("/_authenticated/panel_bANQ")({
   head: () => ({
     meta: [
       { title: "Panel Hípico — Tabla Fija" },
@@ -34,12 +34,17 @@ function todayISO() {
 }
 
 function PanelPage() {
-  const navigate = useNavigate();
   const qc = useQueryClient();
 
   const [fecha, setFecha] = useState(() => todayISO());
   const [selectedHip, setSelectedHip] = useState<string>("");
   const [selectedCarrera, setSelectedCarrera] = useState<string>("");
+
+  // ESTADOS PARA EL MODAL DE PAGAR TICKETS GANADORES
+  const [isPagosModalOpen, setIsPagosModalOpen] = useState(false);
+  const [filtroFechaPago, setFiltroFechaPago] = useState(() => todayISO());
+  const [filtroEstadoCobro, setFiltroEstadoCobro] = useState<string>("todos"); 
+  const [filtroMetodoPago, setFiltroMetodoPago] = useState<string>("todos"); 
 
   // 1. Query: Hipódromos activos en la fecha seleccionada
   const { data: hipodromos = [], isLoading: loadingHip } = useQuery({
@@ -86,7 +91,7 @@ function PanelPage() {
         const idH = String(h.idhip).trim();
         const apus = (apuestas ?? []).filter((a) => String(a.idhip).trim() === idH);
         const jugado = apus.reduce((sum, a) => sum + Number(a.monto ?? 0), 0);
-        const pagado = apus.filter((a) => a.status === "ganador").reduce((sum, a) => sum + Number(a.monto_pagar ?? 0), 0);
+        const pagado = apus.filter((a) => a.status === "cobrado").reduce((sum, a) => sum + Number(a.monto_pagar ?? 0), 0);
         const saldo = jugado - pagado;
 
         return {
@@ -102,7 +107,6 @@ function PanelPage() {
     },
   });
 
-  // Totales Globales de la Jornada
   const totalGlobalJugado = resumenHipodromos.reduce((sum, r) => sum + r.jugado, 0);
   const totalGlobalPagado = resumenHipodromos.reduce((sum, r) => sum + r.pagado, 0);
   const totalGlobalSaldo = totalGlobalJugado - totalGlobalPagado;
@@ -127,8 +131,6 @@ function PanelPage() {
     setSelectedCarrera("");
   }, [selectedHip]);
 
-  const carreraActual = carreras.find((c) => String(c.carrera) === String(selectedCarrera));
-
   // 4. Query: Resumen General por Carrera del Hipódromo Seleccionado
   const { data: resumenCarreras = [], isLoading: loadingResumen } = useQuery({
     enabled: !!selectedHip && !!fecha && carreras.length > 0,
@@ -147,7 +149,7 @@ function PanelPage() {
         const numC = Number(c.carrera);
         const apus = (apuestas ?? []).filter((a) => Number(a.carrera) === numC);
         const jugado = apus.reduce((sum, a) => sum + Number(a.monto ?? 0), 0);
-        const pagado = apus.filter((a) => a.status === "ganador").reduce((sum, a) => sum + Number(a.monto_pagar ?? 0), 0);
+        const pagado = apus.filter((a) => a.status === "cobrado").reduce((sum, a) => sum + Number(a.monto_pagar ?? 0), 0);
         const saldo = jugado - pagado;
 
         return {
@@ -164,13 +166,12 @@ function PanelPage() {
     },
   });
 
-  // Totales generales del hipódromo seleccionado
   const totalJugado = resumenCarreras.reduce((sum, r) => sum + r.jugado, 0);
   const totalPagado = resumenCarreras.reduce((sum, r) => sum + r.pagado, 0);
   const totalSaldo = totalJugado - totalPagado;
 
-  // 5. Query: Caballos / Inscritos consultando detprog con div_fijo
-  const { data: caballos = [], refetch: refetchCaballos, isLoading: loadingCaballos } = useQuery({
+  // 5. Query: Caballos / Inscritos
+  const { data: caballos = [], isLoading: loadingCaballos } = useQuery({
     enabled: !!selectedHip && !!selectedCarrera && !!fecha,
     queryKey: ["admin-carraballos-panel", selectedHip, fecha, selectedCarrera],
     queryFn: async () => {
@@ -201,7 +202,7 @@ function PanelPage() {
         const nroClean = String(ins.nroejem).trim();
         const ejApuestas = (apuestas ?? []).filter((a) => String(a.nroejem).trim() === nroClean);
         const jugado = ejApuestas.reduce((sum, a) => sum + Number(a.monto ?? 0), 0);
-        const pagado = ejApuestas.filter((a) => a.status === "ganador").reduce((sum, a) => sum + Number(a.monto_pagar ?? 0), 0);
+        const pagado = ejApuestas.filter((a) => a.status === "cobrado").reduce((sum, a) => sum + Number(a.monto_pagar ?? 0), 0);
         const saldo = jugado - pagado;
 
         return {
@@ -220,9 +221,122 @@ function PanelPage() {
     },
   });
 
+  // 6. Query para el Modal de Pagos
+  const { data: ticketsGanadores = [], refetch: refetchTicketsGanadores, isLoading: loadingTicketsGanadores } = useQuery({
+    enabled: isPagosModalOpen,
+    queryKey: ["banquero-tickets-ganadores", filtroFechaPago],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("apuestas_win")
+        .select("nroticket, fecha, carrera, nroejem, monto, status, monto_pagar, created_at, idhip, user_id")
+        .eq("fecha", filtroFechaPago)
+        .in("status", ["ganador", "cobrado"])
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      if (!data || data.length === 0) return [];
+
+      const { data: hipsData } = await supabase.from("hipodromos").select("idhip, nomhip");
+      const hipsMap = new Map((hipsData ?? []).map((h) => [String(h.idhip).trim(), h.nomhip.trim()]));
+
+      const userIds = Array.from(new Set(data.map((d) => d.user_id).filter(Boolean)));
+      const { data: profilesData } = await supabase.from("profiles").select("id, full_name, username").in("id", userIds);
+      const profilesMap = new Map((profilesData ?? []).map((p) => [p.id, p.full_name || p.username || "Jugador"]));
+
+      const agrupadosMap = new Map();
+      data.forEach((row) => {
+        const key = row.nroticket;
+        const hipNombre = hipsMap.get(String(row.idhip).trim()) || "HÍPICO";
+        const nombreJugador = profilesMap.get(row.user_id) || "Cliente Taquilla";
+
+        if (!agrupadosMap.has(key)) {
+          agrupadosMap.set(key, {
+            nroticket: row.nroticket,
+            fecha: row.fecha,
+            hora: row.created_at ? new Date(row.created_at).toLocaleTimeString() : "--:--",
+            jugador: nombreJugador,
+            metodoPago: "efectivo",
+            cobrado: row.status === "cobrado",
+            totalPagar: 0,
+            lineas: [],
+          });
+        }
+        const t = agrupadosMap.get(key);
+        const pagoLinea = Number(row.monto_pagar ?? 0);
+        t.totalPagar += pagoLinea;
+        
+        if (row.status === "cobrado") {
+          t.cobrado = true;
+        }
+
+        t.lineas.push({
+          hip: hipNombre,
+          carrera: row.carrera,
+          nro: row.nroejem,
+          montoPremio: pagoLinea,
+        });
+      });
+
+      return Array.from(agrupadosMap.values());
+    },
+  });
+
+  const pagarTicketMutation = useMutation({
+    mutationFn: async (nroticket: string) => {
+      const { error } = await supabase
+        .from("apuestas_win")
+        .update({ status: "cobrado" })
+        .eq("nroticket", nroticket);
+
+      if (error) throw error;
+      return nroticket;
+    },
+    onSuccess: (nroticket) => {
+      toast.success(`¡Ticket #${nroticket} pagado con éxito!`);
+      refetchTicketsGanadores();
+      qc.invalidateQueries({ queryKey: ["admin-resumen-general-hipodromos"] });
+    },
+    onError: (e: Error) => {
+      toast.error(e.message || "Error al procesar el pago");
+    },
+  });
+
+  const ticketsFiltrados = ticketsGanadores.filter((t) => {
+    if (filtroEstadoCobro === "cobrados" && !t.cobrado) return false;
+    if (filtroEstadoCobro === "no_cobrados" && t.cobrado) return false;
+    if (filtroMetodoPago !== "todos" && t.metodoPago !== filtroMetodoPago) return false;
+    return true;
+  });
+
+  const sumTotalPremios = ticketsFiltrados.reduce((acc, t) => acc + t.totalPagar, 0);
+  const sumTotalCobrados = ticketsFiltrados.filter((t) => t.cobrado).reduce((acc, t) => acc + t.totalPagar, 0);
+  const sumTotalPendientes = ticketsFiltrados.filter((t) => !t.cobrado).reduce((acc, t) => acc + t.totalPagar, 0);
+
+  const handleSharePagosWhatsApp = () => {
+    if (ticketsFiltrados.length === 0) return;
+
+    let mensaje = `*MÓDULO DE PAGOS - TICKETS GANADORES*\n`;
+    mensaje += `📅 *Fecha:* ${filtroFechaPago}\n`;
+    mensaje += `🔍 *Filtro Estado:* ${filtroEstadoCobro.toUpperCase()}\n`;
+    mensaje += `-----------------------------------\n`;
+
+    ticketsFiltrados.forEach((t) => {
+      mensaje += `🎫 *#${t.nroticket}* | ${t.jugador}\n`;
+      mensaje += `• Monto: ${formatBs(t.totalPagar)} | *${t.cobrado ? "COBRADO" : "PENDIENTE"}*\n`;
+    });
+
+    mensaje += `-----------------------------------\n`;
+    mensaje += `📊 *RESUMEN DE SUMATORIAS*\n`;
+    mensaje += `🔹 *Total General:* ${formatBs(sumTotalPremios)}\n`;
+    mensaje += `🟢 *Pagados:* ${formatBs(sumTotalCobrados)}\n`;
+    mensaje += `🔸 *Pendientes:* ${formatBs(sumTotalPendientes)}\n`;
+
+    const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(mensaje)}`;
+    window.open(url, "_blank");
+  };
+
   const nomHipodromo = hipodromos.find((h) => h.idhip === selectedHip)?.nomhip?.trim() || selectedHip;
 
-  // Acción Enviar por WhatsApp (Resumen por Hipódromos o por Hipódromo seleccionado)
   const handleShareWhatsApp = () => {
     if (!selectedHip && resumenHipodromos.length === 0) return;
 
@@ -265,7 +379,6 @@ function PanelPage() {
     }
   };
 
-  // Acción Imprimir
   const handlePrint = () => {
     window.print();
   };
@@ -281,9 +394,9 @@ function PanelPage() {
         </p>
       </div>
 
-      {/* BOTÓN ÚNICO DE NAVEGACIÓN */}
+      {/* BOTONES DE NAVEGACIÓN Y PAGAR CORREGIDOS CON <Link> */}
       <div className="mx-auto max-w-6xl mb-6 print:hidden">
-        <div className="flex items-center justify-start">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <Link
             to="/carreras"
             className="group flex h-10 items-center gap-2 rounded-lg border border-[#00ff66]/60 bg-black/80 px-4 font-bold text-xs text-[#00ff66] transition-all duration-200 hover:bg-[#00ff66]/20 hover:border-[#00ff66] shadow-[0_0_12px_rgba(0,255,102,0.15)] active:scale-[0.98]"
@@ -291,10 +404,27 @@ function PanelPage() {
             <ArrowLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-1 text-[#00ff66]" />
             <span className="tracking-wide uppercase">VOLVER A CARRERAS</span>
           </Link>
+
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={() => setIsPagosModalOpen(true)}
+              className="group flex h-10 items-center gap-2 rounded-lg border border-amber-400 bg-amber-500/20 px-5 font-bold text-xs text-amber-300 transition-all duration-200 hover:bg-amber-500 hover:text-black shadow-[0_0_15px_rgba(251,191,36,0.3)] active:scale-[0.98]"
+            >
+              <DollarSign className="h-4 w-4 shrink-0" />
+              <span className="tracking-wide uppercase">PAGAR GANADORES</span>
+            </Button>
+
+            <Link
+              to="/apuestas-hipicas"
+              className="group flex h-10 items-center gap-2 rounded-lg border border-[#00ff66] bg-[#00ff66] px-5 font-bold text-xs text-black transition-all duration-200 hover:bg-[#00e65c] shadow-[0_0_15px_rgba(0,255,102,0.4)] active:scale-[0.98]"
+            >
+              <DollarSign className="h-4 w-4 shrink-0 text-black" />
+              <span className="tracking-wide uppercase">VENDER GANADORES</span>
+            </Link>
+          </div>
         </div>
       </div>
 
-      {/* BLOQUE DE SELECCIÓN DE FECHA, HIPÓDROMO Y CARRERA */}
       <div className="mx-auto max-w-5xl space-y-5">
         <div className="rounded-xl border border-[#00ff66]/30 bg-[#060a08] p-4 sm:p-6 shadow-[0_0_20px_rgba(0,255,102,0.08)] print:hidden">
           <h2 className="text-base font-bold text-[#00ff66] mb-4 flex items-center gap-2">
@@ -355,7 +485,6 @@ function PanelPage() {
           </div>
         </div>
 
-        {/* TABLA DE RESUMEN GENERAL POR HIPÓDROMOS (CUANDO NO HAY HIPÓDROMO SELECCIONADO) */}
         {!selectedHip && (
           <div className="rounded-xl border border-[#00ff66]/30 bg-[#060a08] overflow-hidden shadow-[0_0_20px_rgba(0,255,102,0.08)]">
             <div className="bg-[#00ff66]/10 border-b border-[#00ff66]/30 px-4 py-3 font-bold text-sm text-[#00ff66] flex flex-wrap justify-between items-center gap-2">
@@ -363,7 +492,6 @@ function PanelPage() {
                 RESUMEN GENERAL POR HIPÓDROMOS — <span className="text-[#00ff66]">{fecha}</span>
               </span>
 
-              {/* Botones WhatsApp e Imprimir */}
               <div className="flex items-center gap-2 print:hidden">
                 <Button
                   size="sm"
@@ -435,7 +563,6 @@ function PanelPage() {
                       </TableRow>
                     ))}
                 </TableBody>
-                {/* FILA DE TOTALES GENERALES DE LA JORNADA */}
                 {!loadingResumenHips && resumenHipodromos.length > 0 && (
                   <tfoot className="bg-black border-t-2 border-[#00ff66]/50">
                     <TableRow>
@@ -460,7 +587,6 @@ function PanelPage() {
           </div>
         )}
 
-        {/* TABLA DE RESUMEN POR CARRERA (CUANDO SE SELECCIONA UN HIPÓDROMO) */}
         {selectedHip && (
           <div className="rounded-xl border border-[#00ff66]/30 bg-[#060a08] overflow-hidden shadow-[0_0_20px_rgba(0,255,102,0.08)]">
             <div className="bg-[#00ff66]/10 border-b border-[#00ff66]/30 px-4 py-3 font-bold text-sm text-[#00ff66] flex flex-wrap justify-between items-center gap-2">
@@ -478,7 +604,6 @@ function PanelPage() {
                 </span>
               </div>
 
-              {/* Botones WhatsApp e Imprimir */}
               <div className="flex items-center gap-2 print:hidden">
                 <Button
                   size="sm"
@@ -539,7 +664,6 @@ function PanelPage() {
                       </TableRow>
                     ))}
                 </TableBody>
-                {/* FILA DE TOTALES GENERALES */}
                 {!loadingResumen && resumenCarreras.length > 0 && (
                   <tfoot className="bg-black border-t-2 border-[#00ff66]/50">
                     <TableRow>
@@ -563,7 +687,6 @@ function PanelPage() {
           </div>
         )}
 
-        {/* TABLA DE DETALLE DE EJEMPLARES (AL SELECCIONAR UNA CARRERA ESPECÍFICA) */}
         {selectedCarrera && (
           <div className="rounded-xl border border-[#00ff66]/30 bg-[#060a08] overflow-hidden shadow-[0_0_20px_rgba(0,255,102,0.08)] print:hidden">
             <div className="bg-[#00ff66]/10 border-b border-[#00ff66]/30 px-4 py-3 font-bold text-sm text-[#00ff66] flex justify-between items-center">
@@ -639,6 +762,189 @@ function PanelPage() {
           </div>
         )}
       </div>
+
+      {/* MODAL DE GESTIÓN Y PAGO DE TICKETS GANADORES */}
+      {isPagosModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-5">
+          <div className="w-full max-w-4xl max-h-[90vh] flex flex-col rounded-2xl bg-[#060a08] border border-amber-400/50 text-slate-100 shadow-2xl font-mono overflow-hidden">
+            
+            <div className="flex items-center justify-between border-b border-amber-400/30 bg-amber-500/10 px-5 py-4">
+              <div className="flex items-center gap-2 text-amber-300 font-bold text-base sm:text-lg">
+                <DollarSign className="h-6 w-6 text-amber-400" />
+                <span>Módulo de Pago de Tickets Ganadores</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-slate-400 hover:text-white hover:bg-white/10 rounded-full"
+                onClick={() => setIsPagosModalOpen(false)}
+              >
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+
+            <div className="p-4 sm:p-5 border-b border-amber-400/20 bg-black/40 grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs font-bold uppercase text-amber-300">Fecha de Sorteo</Label>
+                <Input
+                  type="date"
+                  value={filtroFechaPago}
+                  onChange={(e) => setFiltroFechaPago(e.target.value)}
+                  className="h-10 text-xs bg-black border-amber-400/40 text-white focus:border-amber-400"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs font-bold uppercase text-amber-300">Estado de Cobro</Label>
+                <select
+                  value={filtroEstadoCobro}
+                  onChange={(e) => setFiltroEstadoCobro(e.target.value)}
+                  className="h-10 w-full rounded-lg border border-amber-400/40 bg-black px-3 text-xs text-white focus:border-amber-400 focus:outline-none"
+                >
+                  <option value="todos">Todos los Ganadores</option>
+                  <option value="no_cobrados">Pendientes por Pagar</option>
+                  <option value="cobrados">Ya Pagados / Cobrados</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs font-bold uppercase text-amber-300">Tipo / Método de Pago</Label>
+                <select
+                  value={filtroMetodoPago}
+                  onChange={(e) => setFiltroMetodoPago(e.target.value)}
+                  className="h-10 w-full rounded-lg border border-amber-400/40 bg-black px-3 text-xs text-white focus:border-amber-400 focus:outline-none"
+                >
+                  <option value="todos">Todos los Métodos</option>
+                  <option value="efectivo">💵 Efectivo</option>
+                  <option value="pago_movil">📱 Pago Móvil</option>
+                  <option value="divisa">💲 Divisa</option>
+                  <option value="bio_pago">💳 Bio Pago</option>
+                  <option value="transferencia">🏦 Transferencia</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5">
+              {loadingTicketsGanadores ? (
+                <p className="py-12 text-center text-sm text-amber-300 animate-pulse">
+                  Buscando tickets ganadores...
+                </p>
+              ) : ticketsFiltrados.length === 0 ? (
+                <p className="py-12 text-center text-sm text-slate-400">
+                  No se encontraron tickets ganadores con los filtros seleccionados para la fecha {filtroFechaPago}.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table className="w-full text-xs sm:text-sm">
+                    <TableHeader className="bg-black/80 border-b border-amber-400/30">
+                      <TableRow className="border-amber-400/20 hover:bg-transparent">
+                        <TableHead className="text-amber-300 font-bold">Ticket #</TableHead>
+                        <TableHead className="text-amber-300 font-bold">Jugador</TableHead>
+                        <TableHead className="text-amber-300 font-bold">Hora</TableHead>
+                        <TableHead className="text-amber-300 font-bold">Método Pago</TableHead>
+                        <TableHead className="text-right text-amber-300 font-bold">Premio (Bs.)</TableHead>
+                        <TableHead className="text-center text-amber-300 font-bold">Estado</TableHead>
+                        <TableHead className="text-center text-amber-300 font-bold">Acción</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody className="divide-y divide-amber-400/15">
+                      {ticketsFiltrados.map((t) => (
+                        <TableRow key={t.nroticket} className="hover:bg-amber-400/5 transition-colors">
+                          <TableCell className="font-bold font-mono text-amber-400">{t.nroticket}</TableCell>
+                          <TableCell className="text-slate-200">{t.jugador}</TableCell>
+                          <TableCell className="text-slate-400">{t.hora}</TableCell>
+                          <TableCell className="uppercase text-slate-300 font-medium">{t.metodoPago}</TableCell>
+                          <TableCell className="text-right font-bold text-white font-mono">{formatBs(t.totalPagar)}</TableCell>
+                          <TableCell className="text-center">
+                            {t.cobrado ? (
+                              <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-950 text-emerald-400 border border-emerald-500/40">
+                                COBRADO
+                              </span>
+                            ) : (
+                              <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-950 text-amber-400 border border-amber-500/40">
+                                PENDIENTE
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {!t.cobrado ? (
+                              <Button
+                                size="sm"
+                                disabled={pagarTicketMutation.isPending}
+                                onClick={() => {
+                                  if (window.confirm(`¿Confirmar pago del Ticket #${t.nroticket} por Bs. ${formatBs(t.totalPagar)}?`)) {
+                                    pagarTicketMutation.mutate(t.nroticket);
+                                  }
+                                }}
+                                className="h-8 px-3 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black shadow-[0_0_10px_rgba(251,191,36,0.3)]"
+                              >
+                                Pagar Ticket
+                              </Button>
+                            ) : (
+                              <span className="text-xs text-slate-500 flex items-center justify-center gap-1 font-bold">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Pagado
+                              </span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-amber-400/30 bg-black/80 px-5 py-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-4 text-xs">
+                <div>
+                  <span className="text-slate-400 uppercase">Total General: </span>
+                  <span className="font-bold text-white font-mono">{formatBs(sumTotalPremios)}</span>
+                </div>
+                <div>
+                  <span className="text-emerald-400 uppercase">Pagados: </span>
+                  <span className="font-bold text-emerald-300 font-mono">{formatBs(sumTotalCobrados)}</span>
+                </div>
+                <div>
+                  <span className="text-amber-400 uppercase">Pendientes: </span>
+                  <span className="font-bold text-amber-300 font-mono">{formatBs(sumTotalPendientes)}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleSharePagosWhatsApp}
+                  disabled={ticketsFiltrados.length === 0}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold gap-1.5 h-9 px-3"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  WhatsApp
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handlePrint}
+                  className="border-amber-400/50 text-amber-300 hover:bg-amber-400/20 text-xs font-bold gap-1.5 h-9 px-3 bg-black"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  Imprimir
+                </Button>
+
+                <Button
+                  variant="outline"
+                  className="border-amber-400/40 bg-black text-amber-300 hover:bg-amber-400/10 text-xs font-bold h-9 px-4"
+                  onClick={() => setIsPagosModalOpen(false)}
+                >
+                  Cerrar
+                </Button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </main>
   );
 }
