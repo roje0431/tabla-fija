@@ -137,7 +137,7 @@ function AdminResultadosPage() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("programa")
-        .select("idprog, carrera, hora, conf_ok, bloquea_ok, cabgan, divgan")
+        .select("idprog, carrera, hora, conf_ok, bloquea_ok, cabgan, divgan, div_oficial, regla_dividendo")
         .eq("idhip", selectedHip.trim())
         .eq("fecha", fecha)
         .order("carrera", { ascending: true });
@@ -162,7 +162,8 @@ function AdminResultadosPage() {
   useEffect(() => {
     if (carreraActual && carreraActual.conf_ok) {
       setPGanador(carreraActual.cabgan ? String(carreraActual.cabgan).trim() : "");
-      setDivWin1(carreraActual.divgan ? String(carreraActual.divgan) : "");
+      const divOriginal = (carreraActual as any).div_oficial ?? carreraActual.divgan;
+      setDivWin1(divOriginal ? String(divOriginal) : "");
     } else {
       setPGanador("");
       setDivWin1("");
@@ -561,6 +562,18 @@ function AdminResultadosPage() {
             `> 💰 Total abonado a usuarios: Bs. ${totalAbonado.toFixed(2)}`,
           ]);
         }
+      }
+
+      const { error: errRegla } = await supabase
+        .from("programa")
+        .update({ div_oficial: rawDiv, regla_dividendo: evaluacion.reglaNombre } as any)
+        .eq("idhip", cleanHip)
+        .eq("fecha", fecha)
+        .eq("carrera", numCarrera);
+      if (errRegla) {
+        setLogs((prev) => [...prev, `> ⚠️ No se pudo guardar la regla en programa: ${errRegla.message}`]);
+      } else {
+        setLogs((prev) => [...prev, `> 📝 Regla guardada en programa.regla_dividendo: ${evaluacion.reglaNombre}`]);
       }
 
       try {
