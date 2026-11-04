@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { 
   ShieldAlert, KeyRound, UserX, Database, RefreshCw, 
-  Search, Lock, ShieldCheck, Wrench, Trash2 
+  Search, Lock, ShieldCheck, Wrench, Trash2, Download 
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -46,6 +46,7 @@ function MantenimientoPage() {
   // Estados para mantenimiento de tablas seleccionadas
   const [selectedTable, setSelectedTable] = useState("apuestas_win");
   const [loadingTableAction, setLoadingTableAction] = useState(false);
+  const [exportingDBF, setExportingDBF] = useState(false);
 
   const tablasDisponibles = [
     { id: "apuestas_win", label: "Apuestas Hípicas (apuestas_win)" },
@@ -163,6 +164,59 @@ function MantenimientoPage() {
     }
   }
 
+  // EXPORTAR TABLA PARA VISUAL FOXPRO (CSV FORMATO COMPATIBLE)
+  async function handleExportDBF() {
+    setExportingDBF(true);
+    try {
+      const { data, error } = await supabase
+        .from(selectedTable)
+        .select("*");
+
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        toast.error(`La tabla [${selectedTable}] no contiene registros para exportar.`);
+        setExportingDBF(false);
+        return;
+      }
+
+      // 1. Obtener encabezados de la tabla
+      const headers = Object.keys(data[0]);
+      let csvContent = headers.join(",") + "\r\n";
+
+      // 2. Construir filas con escapado estándar CSV
+      data.forEach((row) => {
+        const line = headers.map((header) => {
+          let val = row[header];
+          if (val === null || val === undefined) {
+            return '""';
+          }
+          if (typeof val === "object") {
+            val = JSON.stringify(val);
+          }
+          const str = String(val).replace(/"/g, '""');
+          return `"${str}"`;
+        }).join(",");
+        csvContent += line + "\r\n";
+      });
+
+      // 3. Generar descarga como .CSV (Formato nativo que entiende FoxPro)
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `${selectedTable}_export.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      toast.success(`¡Tabla ${selectedTable} exportada a CSV para FoxPro!`);
+    } catch (err: any) {
+      toast.error(err.message || "Error al exportar la tabla.");
+    } finally {
+      setExportingDBF(false);
+    }
+  }
+
   const usuariosFiltrados = usuarios.filter(
     (u) =>
       u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -183,7 +237,7 @@ function MantenimientoPage() {
               Mantenimiento de Base de Datos
             </h1>
             <p className="text-xs text-slate-400 mt-1">
-              Control total del sistema: restablecimiento de claves, selección de tablas y gestión de usuarios.
+              Control total del sistema: restablecimiento de claves, exportación a Visual FoxPro, tablas y gestión de usuarios.
             </p>
           </div>
 
@@ -246,17 +300,17 @@ function MantenimientoPage() {
           </CardContent>
         </Card>
 
-        {/* TARJETA 2: SELECCIÓN Y MANTENIMIENTO DE TABLAS */}
+        {/* TARJETA 2: SELECCIÓN, MANTENIMIENTO Y EXPORTACIÓN */}
         <Card className="bg-[#060a08] border border-[#00ff66]/40 shadow-[0_0_20px_rgba(0,255,102,0.08)] rounded-xl">
           <CardHeader className="border-b border-[#00ff66]/20 pb-3">
             <CardTitle className="text-base font-bold text-[#00ff66] flex items-center gap-2">
-              <Database className="h-5 w-5 text-[#00ff66]" /> Seleccionar Tabla de BD para Mantenimiento
+              <Database className="h-5 w-5 text-[#00ff66]" /> Seleccionar Tabla de BD para Mantenimiento / Exportación VFP
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-4 space-y-4">
             <div className="space-y-1.5">
               <Label className="text-xs uppercase font-bold text-slate-300">
-                Selecciona la Tabla a intervenir:
+                Selecciona la Tabla a intervenir o exportar:
               </Label>
               <select
                 value={selectedTable}
@@ -271,14 +325,23 @@ function MantenimientoPage() {
               </select>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+              <Button
+                type="button"
+                className="h-11 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase text-xs tracking-wider shadow-[0_0_12px_rgba(16,185,129,0.3)]"
+                disabled={exportingDBF}
+                onClick={handleExportDBF}
+              >
+                <Download className="h-4 w-4 mr-2" /> {exportingDBF ? "Exportando..." : "Exportar a CSV / VFP"}
+              </Button>
+
               <Button
                 type="button"
                 className="h-11 bg-red-950 border border-red-500 text-red-400 hover:bg-red-600 hover:text-white font-bold uppercase text-xs tracking-wider"
                 disabled={loadingTableAction}
                 onClick={() => handleMaintainTable("TRUNCATE")}
               >
-                <Trash2 className="h-4 w-4 mr-2" /> Vaciar Tabla Seleccionada
+                <Trash2 className="h-4 w-4 mr-2" /> Vaciar Tabla
               </Button>
 
               <Button
@@ -287,8 +350,25 @@ function MantenimientoPage() {
                 disabled={loadingTableAction}
                 onClick={() => handleMaintainTable("VACUUM")}
               >
-                <RefreshCw className="h-4 w-4 mr-2" /> Optimizar e Indizar (Vacuum)
+                <RefreshCw className="h-4 w-4 mr-2" /> Optimizar (Vacuum)
               </Button>
+            </div>
+
+            {/* NOTA CON EL COMANDO EXACTO PARA USAR EN VISUAL FOXPRO */}
+            <div className="rounded-lg border border-[#00ff66]/30 bg-black/60 p-3 text-xs text-slate-300 space-y-1">
+              <span className="text-[#00ff66] font-bold block">💡 ¿Cómo abrir el archivo descargado en Visual FoxPro?</span>
+              <p className="font-mono text-[11px] text-slate-400">
+                1. Abre la ventana de comandos en Visual FoxPro y abre la tabla destino vacía:
+              </p>
+              <code className="block bg-black p-1.5 rounded border border-[#00ff66]/20 text-[#00ff66] font-mono text-[11px]">
+                USE tu_tabla.dbf EXCLUSIVE
+              </code>
+              <p className="font-mono text-[11px] text-slate-400">
+                2. Importa la data desde el archivo CSV descargado:
+              </p>
+              <code className="block bg-black p-1.5 rounded border border-[#00ff66]/20 text-[#00ff66] font-mono text-[11px]">
+                APPEND FROM "{selectedTable}_export.csv" TYPE CSV
+              </code>
             </div>
           </CardContent>
         </Card>
