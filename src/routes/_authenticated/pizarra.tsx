@@ -75,6 +75,23 @@ function valorDe(h: HorseRow | undefined | null, race: Race | null) {
   );
 }
 
+// Selección inicial por el instante real de cierre, independiente de la zona horaria.
+function carreraMasCercanaCierre<T extends { status: string; close_at?: string | null }>(
+  carreras: T[],
+  ahora = Date.now(),
+): T | null {
+  let candidata: T | null = null;
+  let cierreMasCercano = Infinity;
+  for (const carrera of carreras) {
+    if (carrera.status !== "open" || !carrera.close_at) continue;
+    const cierre = Date.parse(carrera.close_at);
+    if (!Number.isFinite(cierre) || cierre <= ahora || cierre >= cierreMasCercano) continue;
+    candidata = carrera;
+    cierreMasCercano = cierre;
+  }
+  return candidata;
+}
+
 function PizarraPage() {
   const { data: session } = useSession();
   const [raceId, setRaceId] = useState<string | null>(null);
@@ -106,7 +123,7 @@ function PizarraPage() {
   const races = (fecha ? allRaces.filter((r) => r.race_date === fecha) : allRaces).filter(
     (r) => r.status === "open",
   );
-  const race = races.find((r) => r.id === raceId) ?? races[0] ?? null;
+  const race = races.find((r) => r.id === raceId) ?? carreraMasCercanaCierre(races);
 
   const horsesQ = useQuery({
     queryKey: ["horses", race?.id],
@@ -148,6 +165,24 @@ function PizarraPage() {
     },
   });
 
+  // LÍMITES DEL JUGADOR LEÍDOS DIRECTAMENTE DE SU PERFIL (tabla profiles)
+  const limitesQ = useQuery({
+    queryKey: ["my-limites", session?.userId],
+    enabled: !!session?.userId,
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select(
+          "limite_tabla_nac_carrera, limite_tabla_nac_caballo, limite_tabla_int_carrera, limite_tabla_int_caballo",
+        )
+        .eq("id", session!.userId)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+
   const horses = horsesQ.data ?? [];
   const tickets = ticketsQ.data ?? [];
   const sinBanquero = session?.role === "jugador" && !session.profile?.banquero_id;
@@ -155,22 +190,24 @@ function PizarraPage() {
   const puedeJugar = session?.role === "jugador" && !!session.profile?.banquero_id;
   const maxTablasPermitidas = Number(session?.profile?.max_tablas ?? 40);
 
-  // LÍMITES REALES CONFIGURADOS EN EL PERFIL DEL JUGADOR
+  // LÍMITES REALES CONFIGURADOS EN EL PERFIL DEL JUGADOR (tabla profiles)
   const isInternacional = 
     race?.track_type === 1 || 
     race?.track_type === "1" || 
     race?.is_international === true;
-  
+
+  const limitesPerfil = limitesQ.data;
+
   const limitePersonalCarrera = Number(
     isInternacional
-      ? session?.profile?.limite_tabla_int_carrera ?? session?.profile?.limite_int_carrera ?? 100
-      : session?.profile?.limite_tabla_nac_carrera ?? session?.profile?.limite_nac_carrera ?? 120
+      ? limitesPerfil?.limite_tabla_int_carrera ?? session?.profile?.limite_tabla_int_carrera ?? session?.profile?.limite_int_carrera ?? 100
+      : limitesPerfil?.limite_tabla_nac_carrera ?? session?.profile?.limite_tabla_nac_carrera ?? session?.profile?.limite_nac_carrera ?? 120
   );
 
   const limitePersonalCaballo = Number(
     isInternacional
-      ? session?.profile?.limite_tabla_int_caballo ?? session?.profile?.limite_int_caballo ?? 30
-      : session?.profile?.limite_tabla_nac_caballo ?? session?.profile?.limite_nac_caballo ?? 40
+      ? limitesPerfil?.limite_tabla_int_caballo ?? session?.profile?.limite_tabla_int_caballo ?? session?.profile?.limite_int_caballo ?? 30
+      : limitesPerfil?.limite_tabla_nac_caballo ?? session?.profile?.limite_tabla_nac_caballo ?? session?.profile?.limite_nac_caballo ?? 40
   );
 
   const primerDisponible = horses.find((h) => !h.retired && !h.blocked);
@@ -241,38 +278,52 @@ function PizarraPage() {
   async function registrarJugada() {
     if (!session?.userId || !session.profile?.banquero_id || !race || !horse) return;
 
+    setSaving(true);
+
+    // Refrescar datos antes de validar y registrar para asegurar saldo y límites al día
+    await Promise.all([
+      ticketsQ.refetch(),
+      racesQ.refetch(),
+      race ? horsesQ.refetch() : Promise.resolve(),
+    ]);
+
     if (horse.retired || horse.blocked) {
+      setSaving(false);
       toast.error("Acción denegada: este caballo está retirado o bloqueado y no permite jugadas.");
       return;
     }
     if (excederiaLimiteTablasCount) {
+      setSaving(false);
       toast.error(
         `Límite excedido: ya tienes ${misTablasCaballo} tablas en este caballo. Con ${numTablas} más superarías el límite de ${maxTablasPermitidas} tablas.`,
       );
       return;
     }
     if (excederiaLimiteCantidadCarrera) {
+      setSaving(false);
       toast.error(
         `Límite de cantidad excedido por carrera: Tu límite personal es ${limitePersonalCarrera} Cantidad. Acumulas ${miCantidadAcumuladaCarrera} Cantidad.`,
       );
       return;
     }
     if (excederiaLimiteCantidadCaballo) {
+      setSaving(false);
       toast.error(
         `Límite de cantidad excedido para este caballo: Tu límite personal es ${limitePersonalCaballo} Cantidad. Acumulas ${miCantidadAcumuladaCaballo} Cantidad.`,
       );
       return;
     }
     if (montoTotal <= 0) {
+      setSaving(false);
       toast.error("Escribe cuántas tablas vas a jugar");
       return;
     }
     if (sinSaldo) {
+      setSaving(false);
       toast.error("No tienes saldo suficiente");
       return;
     }
 
-    setSaving(true);
     const code = newTicketCode();
     const { error } = await supabase.from("tickets").insert({
       race_id: race.id,
