@@ -1287,6 +1287,7 @@ function ApuestasHipicasPage() {
 
       {ticketModalData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <style>{`#print-section-ticket { -webkit-print-color-adjust: exact; print-color-adjust: exact; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }`}</style>
           <div className="w-full max-w-md rounded-2xl bg-white text-black p-6 shadow-2xl space-y-4 font-mono">
             
             <div className="flex items-center justify-between border-b pb-3 print:hidden">
@@ -1304,32 +1305,32 @@ function ApuestasHipicasPage() {
               </Button>
             </div>
 
-            <div id="print-section-ticket" className="mx-auto w-[54mm] rounded-xl border border-dashed border-slate-400 bg-slate-50 p-3 space-y-2 text-[11px] font-mono leading-tight">
+            <div id="print-section-ticket" className="mx-auto w-[54mm] rounded-xl border border-neutral-500 bg-white p-3 space-y-2 text-[11px] leading-[1.18] tracking-[-0.01em] antialiased font-['Arial_Narrow','Roboto_Condensed','Liberation_Sans_Narrow',Arial,sans-serif]">
               <div className="flex justify-between font-bold text-xs">
                 <span>TICKET:</span>
                 <span>{ticketModalData.nroTicket}</span>
               </div>
-              <div className="flex justify-between text-[10px] text-slate-600 border-b pb-1.5">
+              <div className="flex justify-between text-[10px] text-neutral-800 border-b border-neutral-400 pb-1.5">
                 <span>FECHA: {ticketModalData.fecha}</span>
                 <span>HORA: {ticketModalData.hora}</span>
               </div>
 
-              <div className="text-center font-bold text-slate-900 tracking-wider py-0.5">
+              <div className="text-center font-bold text-black tracking-tight py-0.5">
                 TABLA FIJA SOLUTORRES<br />
                 APUESTAS HÍPICAS (WIN)
               </div>
 
-              <div className="text-[10px] font-bold text-center text-slate-800 bg-slate-200 py-0.5 rounded uppercase">
+              <div className="text-[10px] font-bold text-center text-neutral-900 bg-neutral-200 py-0.5 rounded uppercase">
                 PAGO: {ticketModalData.metodoPago}
               </div>
 
-              <div className="border-t border-b border-dashed border-slate-300 py-1.5 space-y-1.5">
+              <div className="border-t border-b border-solid border-neutral-400 py-1.5 space-y-1">
                 {ticketModalData.lineas.map((l, idx) => (
-                  <div key={idx} className="space-y-0.5 border-b border-slate-200 pb-1 last:border-b-0 last:pb-0">
+                  <div key={idx} className="space-y-0.5 border-b border-neutral-300 pb-1 last:border-b-0 last:pb-0">
                     <div className="font-bold text-emerald-900 uppercase">
                       📌 {l.hip} — {l.carrera}ª C.
                     </div>
-                    <div className="flex justify-between items-start text-slate-900 gap-1">
+                    <div className="flex justify-between items-start text-neutral-950 gap-1">
                       <span className="break-words">• #{l.nro} {l.nombre}</span>
                       <span className="font-bold text-black shrink-0">{fmt.format(l.monto)}</span>
                     </div>
@@ -1337,18 +1338,18 @@ function ApuestasHipicasPage() {
                 ))}
               </div>
 
-              <div className="space-y-0.5 pt-0.5 text-[10px]">
-                <div className="flex justify-between text-slate-600">
+              <div className="space-y-0.5 pt-0.5 text-[10px] leading-[1.3]">
+                <div className="flex justify-between text-neutral-800">
                   <span>({ticketModalData.lineas.length} JUGADAS) SUB:</span>
                   <span>{fmt.format(ticketModalData.total)}</span>
                 </div>
-                <div className="flex justify-between font-bold text-xs border-t border-slate-300 pt-0.5 text-black">
+                <div className="flex justify-between font-bold text-xs border-t border-neutral-500 pt-0.5 text-black">
                   <span>TOTAL BS.:</span>
                   <span>{fmt.format(ticketModalData.total)}</span>
                 </div>
               </div>
 
-              <div className="text-center text-[9px] text-slate-400 pt-1 font-mono">
+              <div className="text-center text-[9px] text-neutral-700 pt-1 tracking-tight">
                 CONTROL: {Math.random().toString(36).substring(2, 12).toUpperCase()}
               </div>
             </div>
