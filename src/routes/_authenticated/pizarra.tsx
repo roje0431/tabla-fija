@@ -421,19 +421,6 @@ function PizarraPage() {
             </Link>
           </Button>
 
-          {/* Botón Apostar Remate enlazado correctamente a /remates */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5 h-10 bg-black border-emerald-500/50 text-[#00ff66] hover:bg-emerald-950/60 font-bold col-span-2 sm:col-span-2 shadow-[0_0_10px_rgba(0,255,102,0.15)]"
-            asChild
-          >
-            <Link to="/remates">
-              <Zap className="h-4 w-4 text-[#00ff66]" />
-              <span>Apostar Remate</span>
-            </Link>
-          </Button>
-
           <Button
             variant="outline"
             size="sm"
