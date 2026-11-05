@@ -422,14 +422,14 @@ function PizarraPage() {
             </Link>
           </Button>
 
-          {/* Botón Apostar Remate apuntando a carrera.$id */}
+          {/* Botón Apostar Remate enlazado seguro a /carrera/$id */}
           <Button
             variant="outline"
             size="sm"
             className="gap-1.5 h-10 bg-black border-amber-500/50 text-amber-400 hover:bg-amber-950/40 font-bold col-span-2 sm:col-span-2 shadow-[0_0_10px_rgba(245,158,11,0.15)]"
             asChild
           >
-            <Link to="/carrera/$id" params={{ id: race?.id || "general" }}>
+            <Link to={race?.id ? `/carrera/${race.id}` : "/carreras"}>
               <Flame className="h-4 w-4 text-amber-400" />
               <span>Apostar Remate</span>
             </Link>
