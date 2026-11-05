@@ -421,7 +421,7 @@ function PizarraPage() {
             </Link>
           </Button>
 
-          {/* Botón Apostar Remate en la botonera apuntando a /remates */}
+          {/* Botón Apostar Remate enlazado correctamente a /remates */}
           <Button
             variant="outline"
             size="sm"
