@@ -17,6 +17,7 @@ import {
   BookOpen,
   ShieldCheck,
   Info,
+  Flame,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { AppNav } from "@/components/AppNav";
@@ -412,12 +413,25 @@ function PizarraPage() {
           <Button
             variant="outline"
             size="sm"
-            className="gap-1.5 h-10 bg-black border-emerald-500/50 text-[#00ff66] hover:bg-emerald-950/60 font-bold col-span-2 sm:col-span-2 shadow-[0_0_10px_rgba(0,255,102,0.15)]"
+            className="gap-1.5 h-10 bg-black border-emerald-500/50 text-[#00ff66] hover:bg-emerald-950/60 font-bold shadow-[0_0_10px_rgba(0,255,102,0.15)]"
             asChild
           >
             <Link to="/apuestas-hipicas">
               <Trophy className="h-4 w-4 text-[#00ff66]" />
               <span>Apostar Ganadores</span>
+            </Link>
+          </Button>
+
+          {/* Botón Apuesta Remate */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-10 bg-black border-amber-500/50 text-amber-400 hover:bg-amber-950/60 font-bold shadow-[0_0_10px_rgba(245,158,11,0.15)]"
+            asChild
+          >
+            <Link to="/remate">
+              <Flame className="h-4 w-4 text-amber-400" />
+              <span>Apuesta Remate</span>
             </Link>
           </Button>
 
