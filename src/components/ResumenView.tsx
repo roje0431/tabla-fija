@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Eye } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { AppNav } from "@/components/AppNav";
 import { useSession } from "@/hooks/useSession";
@@ -14,7 +16,36 @@ type TicketRow = {
   status: string; created_at: string; banquero_id: string | null; player_id: string | null; race_id: string;
 };
 type MoveRow = { id: string; player_id: string; amount: number; reason: string; created_at: string };
-type CashRow = { id: string; player_id: string; amount: number; status: string | null; created_at: string; kind: "Depósito" | "Retiro" };
+type CashRow = {
+  id: string; player_id: string; amount: number; status: string | null;
+  created_at: string; kind: "Depósito" | "Retiro";
+  banco_destino?: string | null; telefono_destino?: string | null; cedula_destino?: string | null;
+  banco_origen?: string | null; telefono_origen?: string | null; referencia?: string | null;
+  banco?: string | null; telefono?: string | null; cedula?: string | null;
+  comentario_banquero?: string | null;
+};
+
+function datosMovimiento(c: CashRow) {
+  return {
+    banco: c.kind === "Depósito" ? c.banco_origen : c.banco,
+    telefono: c.kind === "Depósito" ? c.telefono_origen : c.telefono,
+    cedula: c.kind === "Depósito" ? c.cedula_destino : c.cedula,
+    referencia: c.referencia ?? null,
+    enviado: c.created_at,
+    // Estas tablas no guardan la hora de aprobación. No usar created_at como aprobación.
+    aprobado: null,
+  };
+}
+
+function fechaHora(iso: string | null) {
+  if (!iso) return "No registrada";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "No registrada";
+  return new Intl.DateTimeFormat("es-VE", {
+    timeZone: "America/Caracas", day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).format(date);
+}
 
 const today = () => new Date().toISOString().slice(0, 10);
 const daysAgo = (n: number) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
@@ -29,6 +60,7 @@ export function ResumenView({ mode }: { mode: Mode }) {
   const [from, setFrom] = useState(daysAgo(7));
   const [to, setTo] = useState(today());
   const [entity, setEntity] = useState("todos");
+  const [selectedCash, setSelectedCash] = useState<CashRow | null>(null);
 
   const entityLabel = mode === "admin" ? "Banquero" : "Jugador";
 
@@ -37,9 +69,10 @@ export function ResumenView({ mode }: { mode: Mode }) {
     enabled: !!uid,
     refetchInterval: 30_000,
     queryFn: async () => {
+      if (!uid) throw new Error("Debe iniciar sesión.");
       const entCol = mode === "admin" ? "admin_id" : "banquero_id";
       const { data: ents, error: e1 } = await supabase
-        .from("profiles").select("id, display_name, email").eq(entCol, uid!);
+        .from("profiles").select("id, display_name, email").eq(entCol, uid);
       if (e1) throw e1;
       const entities: Entity[] = (ents ?? []).map((p) => ({ id: p.id, name: p.display_name || p.email || "—" }));
 
@@ -53,7 +86,7 @@ export function ResumenView({ mode }: { mode: Mode }) {
       let tq = supabase.from("tickets")
         .select("id, code, player_name, amount, payout, status, created_at, banquero_id, player_id, race_id")
         .order("created_at", { ascending: false }).limit(2000);
-      tq = mode === "admin" ? tq.in("race_id", (await supabase.from("races").select("id").eq("owner_id", uid!)).data?.map((r) => r.id) ?? ["00000000-0000-0000-0000-000000000000"]) : tq.eq("banquero_id", uid!);
+      tq = mode === "admin" ? tq.in("race_id", (await supabase.from("races").select("id").eq("owner_id", uid)).data?.map((r) => r.id) ?? ["00000000-0000-0000-0000-000000000000"]) : tq.eq("banquero_id", uid);
       const { data: tickets, error: e2 } = await tq;
       if (e2) throw e2;
 
@@ -66,8 +99,8 @@ export function ResumenView({ mode }: { mode: Mode }) {
       let cash: CashRow[] = [];
       if (mode === "banquero") {
         const [d, r] = await Promise.all([
-          supabase.from("depositos").select("id, player_id, amount, status, created_at").eq("banquero_id", uid!),
-          supabase.from("retiros").select("id, player_id, amount, status, created_at").eq("banquero_id", uid!),
+          supabase.from("depositos").select("id, player_id, amount, status, created_at, banco_destino, telefono_destino, cedula_destino, banco_origen, telefono_origen, referencia, comentario_banquero").eq("banquero_id", uid),
+          supabase.from("retiros").select("id, player_id, amount, status, created_at, banco, telefono, cedula, comentario_banquero").eq("banquero_id", uid),
         ]);
         cash = [
           ...(d.data ?? []).map((x) => ({ ...x, kind: "Depósito" as const })),
@@ -184,18 +217,57 @@ export function ResumenView({ mode }: { mode: Mode }) {
           <Table title="Tickets" head={["Fecha", "Código", "Jugador", "Monto", "Estado", "Premio"]}
             rows={view.tickets.slice(0, 100).map((t) => [t.created_at.slice(0, 10), t.code, t.player_name, bs(Number(t.amount)), t.status, bs(Number(t.payout || 0))])} />
           {mode === "banquero" && (
-            <Table title="Depósitos y retiros" head={["Fecha", "Tipo", "Jugador", "Monto", "Estado"]}
-              rows={view.cash.map((c) => [c.created_at.slice(0, 10), c.kind, view.nameOf(c.player_id), bs(Number(c.amount)), c.status ?? "pending"])} />
+            <Table title="Depósitos y retiros" head={["Fecha", "Tipo", "Jugador", "Monto", "Estado", "Detalle"]}
+              rows={view.cash.map((c) => [c.created_at.slice(0, 10), c.kind, view.nameOf(c.player_id), bs(Number(c.amount)), c.status ?? "pending",
+                <Button key={`ver-${c.kind}-${c.id}`} variant="ghost" size="icon"
+                  aria-label={`Ver ${c.kind.toLowerCase()} de ${view.nameOf(c.player_id)}`}
+                  title="Ver información del movimiento" onClick={() => setSelectedCash(c)}>
+                  <Eye className="h-4 w-4" />
+                </Button>])} />
           )}
           <Table title="Movimientos de saldo" head={["Fecha", "Jugador", "Motivo", "Monto"]}
             rows={view.moves.slice(0, 100).map((m) => [m.created_at.slice(0, 10), view.nameOf(m.player_id), m.reason, bs(Number(m.amount))])} />
         </>
       )}
+      <Dialog open={selectedCash !== null} onOpenChange={(open) => { if (!open) setSelectedCash(null); }}>
+        <DialogContent className="max-h-[85dvh] w-[calc(100%-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Detalle del {selectedCash?.kind.toLowerCase()}</DialogTitle>
+            <DialogDescription>{selectedCash && view?.nameOf(selectedCash.player_id)}</DialogDescription>
+          </DialogHeader>
+          {selectedCash && (() => {
+            const details = datosMovimiento(selectedCash);
+            const fields = [
+              ["Movimiento", selectedCash.id],
+              ["Jugador", view?.nameOf(selectedCash.player_id)],
+              ["Monto", `Bs ${bs(Number(selectedCash.amount))}`],
+              ["Estado", selectedCash.status ?? "pending"],
+              [selectedCash.kind === "Depósito" ? "Banco de origen" : "Banco", details.banco],
+              [selectedCash.kind === "Depósito" ? "Teléfono de origen" : "Teléfono", details.telefono],
+              ...(selectedCash.kind === "Depósito" ? [
+                ["Banco de destino", selectedCash.banco_destino],
+                ["Teléfono de destino", selectedCash.telefono_destino],
+              ] : []),
+              [selectedCash.kind === "Depósito" ? "Cédula de destino" : "Cédula", details.cedula],
+              ["Referencia", details.referencia],
+              ["Hora de envío (Caracas)", fechaHora(details.enviado)],
+              ["Hora de aprobado (Caracas)", fechaHora(details.aprobado)],
+              ["Comentario del banquero", selectedCash.comentario_banquero],
+            ];
+            return <dl className="grid gap-3 sm:grid-cols-2">
+              {fields.map(([label, value]) => <div key={label} className="min-w-0">
+                <dt className="text-xs text-muted-foreground">{label}</dt>
+                <dd className="break-words text-sm">{value || "No registrada"}</dd>
+              </div>)}
+            </dl>;
+          })()}
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
 
-function Table({ title, head, rows }: { title: string; head: string[]; rows: string[][] }) {
+function Table({ title, head, rows }: { title: string; head: string[]; rows: ReactNode[][] }) {
   return (
     <section className="mb-4 rounded-2xl border bg-card p-3">
       <h2 className="mb-2 text-xl">{title}</h2>
@@ -208,7 +280,7 @@ function Table({ title, head, rows }: { title: string; head: string[]; rows: str
             <tbody>
               {rows.map((r, i) => (
                 <tr key={i} className="border-t">
-                  {r.map((c, j) => <td key={j} className={`whitespace-nowrap px-2 py-1 ${j > 0 && /^-?[\d.,]+$/.test(c) ? "text-right font-mono" : ""}`}>{c}</td>)}
+                  {r.map((c, j) => <td key={j} className={`whitespace-nowrap px-2 py-1 ${j > 0 && typeof c === "string" && /^-?[\d.,]+$/.test(c) ? "text-right font-mono" : ""}`}>{c}</td>)}
                 </tr>
               ))}
             </tbody>
