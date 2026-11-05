@@ -9,15 +9,14 @@ import { AppNav } from "@/components/AppNav";
 import { useSession } from "@/hooks/useSession";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { ShieldCheck, Layers, Flame, RefreshCw, AlertCircle, Calendar as CalendarIcon, Trophy, Wallet } from "lucide-react";
+import { Layers, Flame, RefreshCw, Calendar as CalendarIcon, Trophy, Wallet, Lock } from "lucide-react";
 import type { Race } from "@/lib/tabla";
 
 export const Route = createFileRoute("/_authenticated/remates")({
   head: () => ({
     meta: [
       { title: "Gestión de Remates Hípicos" },
-      { name: "description", content: "Subasta de remates en vivo con resumen superior y asignación automática al presionar Enter." },
+      { name: "description", content: "Pizarra de remates en vivo con actualización por usuario y control de cierre de carrera." },
     ],
   }),
   component: RematesView,
@@ -41,16 +40,6 @@ type RemateRow = {
   created_at: string;
 };
 
-const numeroATexto = (num: number): string => {
-  const palabras: Record<number, string> = {
-    1: "UNO", 2: "DOS", 3: "TRES", 4: "CUATRO", 5: "CINCO",
-    6: "SEIS", 7: "SIETE", 8: "OCHO", 9: "NUEVE", 10: "DIEZ",
-    11: "ONCE", 12: "DOCE", 13: "TRECE", 14: "CATORCE", 15: "QUINCE",
-    16: "DIECISEIS", 17: "DIECISIETE", 18: "DIECIOCHO", 19: "DIECINUEVE", 20: "VEINTE",
-  };
-  return palabras[num] || `CABALLO ${num}`;
-};
-
 function todayISO() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
   const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
@@ -61,16 +50,8 @@ function RematesView() {
   const { data: session } = useSession();
   const queryClient = useQueryClient();
 
-  const rawRole = 
-    session?.role || 
-    session?.profile?.role || 
-    (Array.isArray(session?.roles) ? session.roles[0] : null) || 
-    "jugador";
-
-  const role = String(rawRole).toLowerCase();
   const userId = session?.userId || session?.profile?.id;
-  const userName = session?.profile?.display_name || session?.email || "USUARIO";
-  const isAdmin = role === "admin" || role === "superadmin" || role === "banquero";
+  const userName = session?.profile?.display_name || session?.email || "JUGADOR";
 
   const [fecha, setFecha] = useState(todayISO);
   const [hip, setHip] = useState("");
@@ -136,6 +117,8 @@ function RematesView() {
   });
 
   const carreras = carrerasQuery.data ?? [];
+  const carreraSeleccionada = carreras.find((c) => String(c.id) === String(raceId));
+  const carreraCerrada = carreraSeleccionada?.status === "closed" || (carreraSeleccionada as any)?.bloquea_ok === true;
 
   useEffect(() => {
     if (!raceId && carreras.length > 0) {
@@ -143,10 +126,11 @@ function RematesView() {
     }
   }, [raceId, carreras]);
 
-  // 3. Remates de la carrera
+  // 3. Remates de la carrera (con intervalo de actualización para sincronizar en tiempo real si otro usuario cambia algo)
   const rematesQ = useQuery({
     queryKey: ["remates-admin", raceId],
     enabled: !!raceId,
+    refetchInterval: 5000,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("remates")
@@ -172,6 +156,7 @@ function RematesView() {
   });
 
   const remates = rematesQ.data ?? [];
+  const isRefreshing = rematesQ.isFetching;
 
   // Cálculo de sumatorias totales por tabla y monto jugado por el usuario logueado en la carrera
   const { totalTabla1, totalTabla2, totalTabla3, totalTabla4, montoJugadoUsuario } = useMemo(() => {
@@ -207,6 +192,10 @@ function RematesView() {
   // Mutación para actualizar celda al presionar Enter
   const actualizarRemateCelda = useMutation({
     mutationFn: async ({ id, campoPrecio, campoApostador, valorPrecio }: { id: string; campoPrecio: string; campoApostador: string; valorPrecio: number }) => {
+      if (carreraCerrada) {
+        throw new Error("Esta carrera ya ha sido cerrada por el administrador. No se admiten cambios.");
+      }
+
       const { error } = await supabase
         .from("remates")
         .update({
@@ -245,6 +234,23 @@ function RematesView() {
 
       <div className="mx-auto w-full max-w-4xl px-3 sm:px-4 pt-2">
         <AppNav title="Pizarra de Remates en Vivo" />
+
+        {/* BARRA DE ACCIÓN SUPERIOR CON BOTÓN DE REFRESCAR */}
+        <div className="my-4 flex items-center justify-between gap-3">
+          <div className="text-xs font-mono text-slate-400">
+            Usuario actual: <strong className="text-[#00ff66]">{userName}</strong>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2 bg-black border-emerald-500/50 text-[#00ff66] hover:bg-emerald-950/60 font-bold shadow-[0_0_10px_rgba(0,255,102,0.15)]"
+            disabled={isRefreshing}
+            onClick={() => rematesQ.refetch()}
+          >
+            <RefreshCw className={`h-4 w-4 text-[#00ff66] ${isRefreshing ? "animate-spin" : ""}`} />
+            {isRefreshing ? "Actualizando..." : "Refrescar Pizarra"}
+          </Button>
+        </div>
 
         {/* SELECTORES DE FECHA, HIPÓDROMO Y CARRERA */}
         <div className="my-4 space-y-3 rounded-2xl border border-emerald-500/30 bg-neon-card p-3.5">
@@ -298,12 +304,17 @@ function RematesView() {
                 <option value="" className="bg-zinc-950 text-slate-300">Selecciona carrera</option>
                 {carreras.map((c) => (
                   <option key={c.id} value={c.id} className="bg-zinc-950 text-[#00ff66]">
-                    {c.race_number}ª Carrera
+                    {c.race_number}ª Carrera {c.status === "closed" ? "(CERRADA)" : ""}
                   </option>
                 ))}
               </select>
             </div>
           </div>
+          {carreraCerrada && (
+            <div className="rounded-lg bg-rose-950/60 border border-rose-500/50 p-2 text-center text-xs font-bold text-rose-300 flex items-center justify-center gap-1.5">
+              <Lock className="h-4 w-4" /> Esta carrera está cerrada por el administrador. Solo modo lectura.
+            </div>
+          )}
         </div>
 
         {/* PANEL RESUMEN SUPERIOR (TOTALES DE TABLAS Y MONTO JUGADO POR EL USUARIO) */}
@@ -345,7 +356,7 @@ function RematesView() {
               <Layers className="w-4 h-4 text-[#00ff66]" /> Ejemplares y Tablas ({remates.length})
             </h3>
             <span className="text-[10px] text-emerald-400 font-mono">
-              Usuario: <strong className="text-white">{userName}</strong>
+              Presiona <strong className="text-white">Enter</strong> para guardar tu puja
             </span>
           </div>
 
@@ -398,6 +409,7 @@ function RematesView() {
                             type="number"
                             step="0.01"
                             inputMode="decimal"
+                            disabled={carreraCerrada}
                             value={tabla.val}
                             onChange={(e) => {
                               const v = e.target.value;
@@ -409,6 +421,10 @@ function RematesView() {
                             onKeyDown={(e) => {
                               if (e.key === "Enter") {
                                 e.preventDefault();
+                                if (carreraCerrada) {
+                                  toast.error("Carrera cerrada. No se pueden modificar precios.");
+                                  return;
+                                }
                                 const parsed = parseFloat(tabla.val) || 0;
                                 actualizarRemateCelda.mutate({
                                   id: r.id,
@@ -418,7 +434,7 @@ function RematesView() {
                                 });
                               }
                             }}
-                            className="h-8 w-full text-center font-mono font-bold text-xs neon-input p-1"
+                            className="h-8 w-full text-center font-mono font-bold text-xs neon-input p-1 disabled:opacity-50"
                           />
                           <span className={`text-[10px] font-bold font-mono mt-1 truncate max-w-full ${apostadorActual === "CASA" ? "text-slate-500" : "text-[#00ff66]"}`}>
                             {apostadorActual}
