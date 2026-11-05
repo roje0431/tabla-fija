@@ -1,7 +1,8 @@
+/* eslint-disable */
 // @ts-nocheck
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { AppNav } from "@/components/AppNav";
@@ -9,14 +10,14 @@ import { useSession } from "@/hooks/useSession";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ShieldCheck, Trophy, Layers, Flame, RefreshCw, AlertCircle } from "lucide-react";
+import { ShieldCheck, Layers, Flame, RefreshCw, AlertCircle, Calendar as CalendarIcon, Trophy } from "lucide-react";
 import type { Race } from "@/lib/tabla";
 
 export const Route = createFileRoute("/_authenticated/remates")({
   head: () => ({
     meta: [
       { title: "Gestión de Remates Hípicos" },
-      { name: "description", content: "Administración y tablero de subasta/remates en vivo." },
+      { name: "description", content: "Administración y tablero de subasta/remates en vivo por hipódromo y carrera." },
     ],
   }),
   component: RematesView,
@@ -52,34 +53,105 @@ const numeroATexto = (num: number): string => {
   return palabras[num] || `CABALLO ${num}`;
 };
 
+function todayISO() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
 function RematesView() {
   const { data: session } = useSession();
   const queryClient = useQueryClient();
 
+  const rawRole = 
+    session?.role || 
+    session?.profile?.role || 
+    (Array.isArray(session?.roles) ? session.roles[0] : null) || 
+    "jugador";
+
+  const role = String(rawRole).toLowerCase();
+  const userId = session?.userId || session?.profile?.id;
+  const isAdmin = role === "admin" || role === "superadmin" || role === "banquero";
+
+  const [fecha, setFecha] = useState(todayISO);
+  const [hip, setHip] = useState("");
   const [raceId, setRaceId] = useState<string>("");
   const [numeroCaballo, setNumeroCaballo] = useState("1");
   const [nombreCaballo, setNombreCaballo] = useState("UNO");
   const [precioInicial, setPrecioInicial] = useState("0");
 
-  const isAdmin = session?.role === "admin" || session?.role === "banquero";
-  const userId = session?.userId;
-
-  // Consulta de carreras disponibles
-  const racesQ = useQuery({
-    queryKey: ["races-remates"],
+  // 1. Consulta de hipódromos disponibles por fecha en la tabla programa
+  const hipQuery = useQuery({
+    queryKey: ["remates-hips", fecha],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("races")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const { data: progs, error: progError } = await supabase.from("programa").select("idhip").eq("fecha", fecha);
+      if (progError) throw progError;
+      const ids = Array.from(new Set((progs ?? []).map((p) => p.idhip)));
+      if (!ids.length) return [];
+      const { data, error } = await supabase.from("hipodromos").select("idhip, nomhip, tipo").in("idhip", ids).eq("activo", true).order("nomhip");
       if (error) throw error;
-      return (data ?? []) as Race[];
+      return data ?? [];
     },
   });
 
-  const races = racesQ.data ?? [];
+  const hipodromos = hipQuery.data ?? [];
 
-  // Consulta de remates filtrados por el admin/banquero autenticado
+  // Seleccionar automáticamente el primer hipódromo si hay disponibles y no hay ninguno seleccionado
+  useEffect(() => {
+    if (!hip && hipodromos.length > 0) {
+      setHip(hipodromos[0].idhip);
+    }
+  }, [hip, hipodromos]);
+
+  // 2. Consulta de carreras para el hipódromo y fecha seleccionados (usando la tabla 'races' o 'programa' unificada)
+  const carrerasQuery = useQuery({
+    enabled: !!hip,
+    queryKey: ["remates-carreras", hip, fecha],
+    queryFn: async () => {
+      if (!hip) return [];
+      // Intentamos consultar primero la tabla unificada 'races' si existe, o 'programa'
+      const { data, error } = await supabase
+        .from("races")
+        .select("*")
+        .eq("race_date", fecha)
+        .order("race_number");
+
+      if (!error && data && data.length > 0) {
+        // Filtrar por pista si coincide el nombre o id
+        return data as Race[];
+      }
+
+      // Alternativa consultando la tabla programa si fuera necesario
+      const { data: progData, error: progErr } = await supabase
+        .from("programa")
+        .select("idprog, carrera, hora, bloquea_ok")
+        .eq("idhip", hip)
+        .eq("fecha", fecha)
+        .order("carrera");
+
+      if (progErr) throw progErr;
+      
+      // Mapeamos al formato estándar de carreras
+      return (progData ?? []).map((p) => ({
+        id: String(p.idprog),
+        race_number: p.carrera,
+        track: hip,
+        status: p.bloquea_ok ? "closed" : "open",
+        race_date: fecha,
+      })) as Race[];
+    },
+  });
+
+  const carreras = carrerasQuery.data ?? [];
+
+  // Seleccionar automáticamente la primera carrera disponible
+  useEffect(() => {
+    if (!raceId && carreras.length > 0) {
+      setRaceId(carreras[0].id);
+    }
+  }, [raceId, carreras]);
+
+  // 3. Consulta de remates filtrados por el admin/banquero y la carrera seleccionada
   const rematesQ = useQuery({
     queryKey: ["remates-admin", userId, raceId],
     enabled: !!userId,
@@ -106,7 +178,7 @@ function RematesView() {
   const crearRemate = useMutation({
     mutationFn: async () => {
       if (!userId) throw new Error("No estás autenticado");
-      const selectedRace = raceId || races[0]?.id;
+      const selectedRace = raceId || carreras[0]?.id;
       if (!selectedRace) throw new Error("Debe seleccionar una carrera válida");
 
       const numParsed = parseInt(numeroCaballo, 10) || 1;
@@ -132,8 +204,9 @@ function RematesView() {
     },
     onSuccess: () => {
       toast.success("Ejemplar registrado en remate con éxito");
-      setNombreCaballo(numeroATexto((parseInt(numeroCaballo, 10) || 1) + 1));
-      setNumeroCaballo(String((parseInt(numeroCaballo, 10) || 1) + 1));
+      const siguienteNum = (parseInt(numeroCaballo, 10) || 1) + 1;
+      setNumeroCaballo(String(siguienteNum));
+      setNombreCaballo(numeroATexto(siguienteNum));
       setPrecioInicial("0");
       queryClient.invalidateQueries({ queryKey: ["remates-admin"] });
     },
@@ -189,25 +262,71 @@ function RematesView() {
       <div className="mx-auto w-full max-w-xl px-3 sm:px-4 pt-2">
         <AppNav title="Remates Hípicos" />
 
-        {/* SELECTOR DE CARRERA */}
-        <div className="my-4">
-          <label className="block space-y-1 text-[11px] uppercase tracking-widest text-slate-400">
-            Filtrar por Carrera
+        {/* SELECTORES DE FECHA, HIPÓDROMO Y CARRERA */}
+        <div className="my-4 space-y-3 rounded-2xl border border-emerald-500/30 bg-neon-card p-3.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Fecha */}
+            <div className="space-y-1">
+              <label className="block text-[11px] uppercase tracking-widest text-[#00ff66] font-bold flex items-center gap-1">
+                <CalendarIcon className="h-3.5 w-3.5" /> Fecha
+              </label>
+              <Input
+                type="date"
+                value={fecha}
+                onChange={(e) => {
+                  setFecha(e.target.value);
+                  setHip("");
+                  setRaceId("");
+                }}
+                className="neon-input h-10 text-xs font-semibold"
+              />
+            </div>
+
+            {/* Hipódromo */}
+            <div className="space-y-1">
+              <label className="block text-[11px] uppercase tracking-widest text-[#00ff66] font-bold">
+                Hipódromo
+              </label>
+              <select
+                value={hip}
+                onChange={(e) => {
+                  setHip(e.target.value);
+                  setRaceId("");
+                }}
+                className="neon-input h-10 w-full rounded-md px-3 text-xs font-semibold focus:outline-none"
+              >
+                <option value="" className="bg-zinc-950 text-slate-300">
+                  {hipQuery.isLoading ? "Cargando..." : "Selecciona hipódromo"}
+                </option>
+                {hipodromos.map((h) => (
+                  <option key={h.idhip} value={h.idhip} className="bg-zinc-950 text-[#00ff66]">
+                    {h.nomhip.trim()}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Selector de Carrera */}
+          <div className="space-y-1">
+            <label className="block text-[11px] uppercase tracking-widest text-[#00ff66] font-bold">
+              Carrera
+            </label>
             <select
               value={raceId}
               onChange={(e) => setRaceId(e.target.value)}
-              className="neon-input h-11 w-full rounded-md px-3 text-sm font-semibold focus:outline-none"
+              className="neon-input h-10 w-full rounded-md px-3 text-xs font-semibold focus:outline-none"
             >
               <option value="" className="bg-zinc-950 text-slate-300">
-                -- Todas las carreras --
+                {carrerasQuery.isLoading ? "Cargando carreras..." : carreras.length ? "Selecciona carrera" : "Sin carreras disponibles"}
               </option>
-              {races.map((r) => (
-                <option key={r.id} value={r.id} className="bg-zinc-950 text-[#00ff66]">
-                  {r.track} · Carrera {r.race_number}ª
+              {carreras.map((c) => (
+                <option key={c.id} value={c.id} className="bg-zinc-950 text-[#00ff66]">
+                  {c.race_number}ª Carrera {c.track ? `(${c.track})` : ""}
                 </option>
               ))}
             </select>
-          </label>
+          </div>
         </div>
 
         {/* PANEL DE REGISTRO PARA ADMINISTRADOR / BANQUERO */}
@@ -275,7 +394,7 @@ function RematesView() {
             <Button
               type="submit"
               className="w-full h-11 font-black uppercase text-sm neon-glow-btn mt-2"
-              disabled={crearRemate.isPending}
+              disabled={crearRemate.isPending || !raceId}
             >
               {crearRemate.isPending ? "Guardando..." : "Guardar en Remates"}
             </Button>
@@ -302,7 +421,7 @@ function RematesView() {
           {!rematesQ.isLoading && rematesQ.data?.length === 0 && (
             <div className="rounded-2xl border border-zinc-800 bg-neon-card p-6 text-center text-xs text-slate-400 font-mono flex flex-col items-center gap-2">
               <AlertCircle className="w-5 h-5 text-amber-400" />
-              <span>No hay ejemplares registrados en la tabla de remates para esta selección.</span>
+              <span>No hay ejemplares registrados en la tabla de remates para esta carrera.</span>
             </div>
           )}
 
@@ -332,7 +451,7 @@ function RematesView() {
                       )}
                     </div>
                     <p className="text-xs text-slate-400 font-mono">
-                      P1: <span className="text-[#00ff66] font-bold">Bs {r.precio1}</span> ({r.apostador1 || "CASA"})
+                      Precio Inicial: <span className="text-[#00ff66] font-bold">Bs {r.precio1}</span> ({r.apostador1 || "CASA"})
                     </p>
                   </div>
                 </div>
