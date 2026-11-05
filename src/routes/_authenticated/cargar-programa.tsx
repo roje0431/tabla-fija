@@ -150,6 +150,8 @@ function CargarProgramaPage() {
   const [validaPolla, setValidaPolla] = useState(false);
   // Configurado en true por defecto para Tabla Fija
   const [validaTablaFija, setValidaTablaFija] = useState(true);
+  // Configurado en true por defecto para el Remate
+  const [validaRemate, setValidaRemate] = useState(true);
   const [validaNro, setValidaNro] = useState<string>("1");
   const [texto, setTexto] = useState<string>("");
 
@@ -321,6 +323,40 @@ function CargarProgramaPage() {
         if (hErr) throw hErr;
       }
 
+      // 4. Si se activa Válida para el Remate, poblar la tabla remates
+      if (validaRemate) {
+        // Limpiar registros previos de esta carrera en remates
+        const { error: delRemErr } = await supabase
+          .from("remates")
+          .delete()
+          .eq("admin_id", adminUserId)
+          .eq("carrera_id", idprog);
+
+        if (delRemErr) {
+          console.warn("Aviso al limpiar remates previos:", delRemErr.message);
+        }
+
+        const remateRows = parsed.map((e) => ({
+          carrera_id: idprog,
+          admin_id: adminUserId,
+          numero: parseInt(e.nroejem, 10) || 0,
+          nombre: e.nombreeje,
+          retirado: e.retirado,
+          multiplier: 0,
+          precio1: 0,
+          precio2: 0,
+          precio3: 0,
+          precio4: 0,
+          apostador1: "CASA",
+          apostador2: "CASA",
+          apostador3: "CASA",
+          apostador4: "CASA",
+        }));
+
+        const { error: remErr } = await supabase.from("remates").insert(remateRows);
+        if (remErr) throw new Error("Error al cargar la tabla de remates: " + remErr.message);
+      }
+
       return { nroCarrera, nroValidaFinal };
     },
     onSuccess: ({ nroCarrera, nroValidaFinal }) => {
@@ -331,6 +367,7 @@ function CargarProgramaPage() {
       toast.success(mensaje);
 
       qc.invalidateQueries({ queryKey: ["programa"] });
+      qc.invalidateQueries({ queryKey: ["remates"] });
       setCarrera(String(nroCarrera + 1));
 
       if (validaPolla) {
@@ -454,10 +491,14 @@ function CargarProgramaPage() {
                 )}
               </div>
 
-              <div className="rounded-xl border border-[#00ff66]/30 bg-black/60 p-4">
+              <div className="rounded-xl border border-[#00ff66]/30 bg-black/60 p-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <Label htmlFor="valida-tf" className="cursor-pointer font-bold text-slate-200 text-sm">⭐ Válida para tabla fija</Label>
                   <Switch id="valida-tf" checked={validaTablaFija} onCheckedChange={setValidaTablaFija} />
+                </div>
+                <div className="flex items-center justify-between gap-3 pt-2 border-t border-[#00ff66]/20">
+                  <Label htmlFor="valida-remate" className="cursor-pointer font-bold text-slate-200 text-sm">⭐ Válida para el remate</Label>
+                  <Switch id="valida-remate" checked={validaRemate} onCheckedChange={setValidaRemate} />
                 </div>
               </div>
             </CardContent>
