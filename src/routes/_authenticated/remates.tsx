@@ -2,7 +2,7 @@
 // @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { AppNav } from "@/components/AppNav";
@@ -10,14 +10,14 @@ import { useSession } from "@/hooks/useSession";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ShieldCheck, Layers, Flame, RefreshCw, AlertCircle, Calendar as CalendarIcon } from "lucide-react";
+import { ShieldCheck, Layers, Flame, RefreshCw, AlertCircle, Calendar as CalendarIcon, Trophy, Wallet } from "lucide-react";
 import type { Race } from "@/lib/tabla";
 
 export const Route = createFileRoute("/_authenticated/remates")({
   head: () => ({
     meta: [
       { title: "Gestión de Remates Hípicos" },
-      { name: "description", content: "Subasta de remates en vivo con asignación automática de apostador al presionar Enter." },
+      { name: "description", content: "Subasta de remates en vivo con resumen superior y asignación automática al presionar Enter." },
     ],
   }),
   component: RematesView,
@@ -76,7 +76,6 @@ function RematesView() {
   const [hip, setHip] = useState("");
   const [raceId, setRaceId] = useState<string>("");
 
-  // Estado local para los inputs de edición en tiempo real antes de presionar Enter
   const [inputsLocales, setInputsLocales] = useState<Record<string, { p1: string; p2: string; p3: string; p4: string }>>({});
 
   // 1. Hipódromos por fecha
@@ -157,7 +156,6 @@ function RematesView() {
 
       if (error) throw error;
       
-      // Inicializar estados locales con los valores de la base de datos
       const map: Record<string, { p1: string; p2: string; p3: string; p4: string }> = {};
       (data ?? []).forEach((r: RemateRow) => {
         map[r.id] = {
@@ -173,7 +171,40 @@ function RematesView() {
     },
   });
 
-  // Mutación para actualizar la celda de remate al presionar Enter
+  const remates = rematesQ.data ?? [];
+
+  // Cálculo de sumatorias totales por tabla y monto jugado por el usuario logueado en la carrera
+  const { totalTabla1, totalTabla2, totalTabla3, totalTabla4, montoJugadoUsuario } = useMemo(() => {
+    let t1 = 0, t2 = 0, t3 = 0, t4 = 0, usuarioTotal = 0;
+    const nombreUpper = userName.toUpperCase();
+
+    remates.forEach((r) => {
+      const p1 = Number(r.precio1) || 0;
+      const p2 = Number(r.precio2) || 0;
+      const p3 = Number(r.precio3) || 0;
+      const p4 = Number(r.precio4) || 0;
+
+      t1 += p1;
+      t2 += p2;
+      t3 += p3;
+      t4 += p4;
+
+      if (String(r.apostador1 || "").toUpperCase() === nombreUpper) usuarioTotal += p1;
+      if (String(r.apostador2 || "").toUpperCase() === nombreUpper) usuarioTotal += p2;
+      if (String(r.apostador3 || "").toUpperCase() === nombreUpper) usuarioTotal += p3;
+      if (String(r.apostador4 || "").toUpperCase() === nombreUpper) usuarioTotal += p4;
+    });
+
+    return {
+      totalTabla1: t1,
+      totalTabla2: t2,
+      totalTabla3: t3,
+      totalTabla4: t4,
+      montoJugadoUsuario: usuarioTotal,
+    };
+  }, [remates, userName]);
+
+  // Mutación para actualizar celda al presionar Enter
   const actualizarRemateCelda = useMutation({
     mutationFn: async ({ id, campoPrecio, campoApostador, valorPrecio }: { id: string; campoPrecio: string; campoApostador: string; valorPrecio: number }) => {
       const { error } = await supabase
@@ -275,11 +306,43 @@ function RematesView() {
           </div>
         </div>
 
+        {/* PANEL RESUMEN SUPERIOR (TOTALES DE TABLAS Y MONTO JUGADO POR EL USUARIO) */}
+        <div className="my-4 rounded-2xl border-2 border-emerald-500/50 bg-[#040806] p-4 shadow-[0_0_20px_rgba(0,255,102,0.15)] space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-500/20 pb-2">
+            <h4 className="text-xs font-black uppercase tracking-wider text-[#00ff66] flex items-center gap-1.5">
+              <Trophy className="h-4 w-4" /> Resumen General de la Carrera
+            </h4>
+            <div className="flex items-center gap-2 text-xs font-mono text-slate-300 bg-black/60 px-3 py-1 rounded-full border border-emerald-500/30">
+              <Wallet className="h-3.5 w-3.5 text-[#00ff66]" />
+              <span>Tu monto jugado: <strong className="text-[#00ff66] font-bold">Bs. {montoJugadoUsuario.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</strong></span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+            <div className="rounded-xl bg-black border border-emerald-500/40 p-2.5 shadow-inner">
+              <span className="text-[10px] uppercase font-mono text-slate-400 block">TABLA 1</span>
+              <span className="font-display text-lg font-black text-[#00ff66]">{totalTabla1.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</span>
+            </div>
+            <div className="rounded-xl bg-black border border-emerald-500/40 p-2.5 shadow-inner">
+              <span className="text-[10px] uppercase font-mono text-slate-400 block">TABLA 2</span>
+              <span className="font-display text-lg font-black text-[#00ff66]">{totalTabla2.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</span>
+            </div>
+            <div className="rounded-xl bg-black border border-emerald-500/40 p-2.5 shadow-inner">
+              <span className="text-[10px] uppercase font-mono text-slate-400 block">TABLA 3</span>
+              <span className="font-display text-lg font-black text-[#00ff66]">{totalTabla3.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</span>
+            </div>
+            <div className="rounded-xl bg-black border border-emerald-500/40 p-2.5 shadow-inner">
+              <span className="text-[10px] uppercase font-mono text-slate-400 block">TABLA 4</span>
+              <span className="font-display text-lg font-black text-[#00ff66]">{totalTabla4.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</span>
+            </div>
+          </div>
+        </div>
+
         {/* TABLA ESTILO GRILLA DE REMATES */}
         <section className="space-y-3">
           <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
             <h3 className="text-sm font-black uppercase flex items-center gap-2 text-slate-200">
-              <Layers className="w-4 h-4 text-[#00ff66]" /> Ejemplares y Tablas ({rematesQ.data?.length ?? 0})
+              <Layers className="w-4 h-4 text-[#00ff66]" /> Ejemplares y Tablas ({remates.length})
             </h3>
             <span className="text-[10px] text-emerald-400 font-mono">
               Usuario: <strong className="text-white">{userName}</strong>
@@ -292,14 +355,14 @@ function RematesView() {
             </div>
           )}
 
-          {!rematesQ.isLoading && rematesQ.data?.length === 0 && (
+          {!rematesQ.isLoading && remates.length === 0 && (
             <div className="rounded-2xl border border-zinc-800 bg-neon-card p-6 text-center text-xs text-slate-400 font-mono">
               No hay ejemplares de remate cargados para esta carrera.
             </div>
           )}
 
           <div className="grid grid-cols-1 gap-2">
-            {rematesQ.data?.map((r) => {
+            {remates.map((r) => {
               const loc = inputsLocales[r.id] || { p1: "0", p2: "0", p3: "0", p4: "0" };
 
               return (
