@@ -138,32 +138,19 @@ function BanqueroPage() {
 
   async function handleApproveReject(id: string, type: "deposito" | "retiro", action: "approved" | "rejected", playerId: string, amount: number) {
     try {
-      const tableName = type === "deposito" ? "depositos" : "retiros";
-
-      const { error: txError } = await supabase
-        .from(tableName)
-        .update({ status: action })
-        .eq("id", id);
-
-      if (txError) throw txError;
-
-      if (action === "approved") {
-        const delta = type === "deposito" ? Number(amount) : -Number(amount);
-        const reason = type === "deposito" ? "aprobación de depósito por banquero" : "aprobación de retiro por banquero";
-
-        const { error: rpcError } = await supabase.rpc("set_player_balance", {
-          _player: playerId,
-          _delta: delta,
-          _reason: reason,
-        });
-
-        if (rpcError) throw rpcError;
-      }
+      // Proceso atómico en la base de datos: valida que siga pendiente,
+      // cambia el estado, mueve el saldo y deja registro de auditoría.
+      const { error: rpcError } = await supabase.rpc("banquero_procesar_solicitud", {
+        _id: id,
+        _tipo: type,
+        _accion: action,
+      });
+      if (rpcError) throw rpcError;
 
       toast.success(
         action === "approved"
-          ? `${type === "deposito" ? "Depósito aprobado y saldo acreditado" : "Retiro aprobado y saldo descontado"} con éxito`
-          : "Solicitud rechazada"
+          ? `${type === "deposito" ? "Depósito aprobado y saldo acreditado" : "Retiro aprobado"} con éxito`
+          : type === "retiro" ? "Retiro rechazado y saldo devuelto" : "Solicitud rechazada"
       );
       qc.invalidateQueries({ queryKey: ["banquero-requests"] });
       qc.invalidateQueries({ queryKey: ["my-players"] });
