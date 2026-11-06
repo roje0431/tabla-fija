@@ -4,7 +4,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { RefreshCw, Printer, Clock, Trophy, Edit2, Check, X, Lock, Unlock, Ban, HelpCircle, Zap, LayoutDashboard, Ticket as TicketIcon, Coins, FileText } from "lucide-react";
+import { RefreshCw, Printer, Clock, Trophy, Edit2, Check, X, Lock, Unlock, Ban, HelpCircle, Zap, LayoutDashboard, Ticket as TicketIcon, Coins, FileText, Flame } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { AppNav } from "@/components/AppNav";
 import { RaceDateFilter } from "@/components/RaceDateFilter";
@@ -47,6 +47,8 @@ export const Route = createFileRoute("/_authenticated/carreras")({
         name: "description",
         content: "Monta carreras, fija la tabla, cierra apuestas, declara quién cruzó la raya y revisa las ventas de tus banqueros.",
       },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
       { property: "og:title", content: "Carreras y balance — Tabla Fija" },
       { property: "og:description", content: "Tabla fija, cierre, cruce de la raya y balance de tus banqueros." },
     ],
@@ -57,6 +59,26 @@ export const Route = createFileRoute("/_authenticated/carreras")({
     </RoleGate>
   ),
 });
+
+function seleccionarCarreraPorCierre<T extends { id: string; status: string; close_at?: string | null }>(
+  carreras: T[],
+  seleccionManual: string | null,
+  ahora = Date.now(),
+): T | null {
+  const manual = carreras.find((r) => r.id === seleccionManual);
+  if (manual) return manual;
+  let cercana: T | null = null;
+  let cierreCercano = Infinity;
+  for (const carrera of carreras) {
+    if (carrera.status !== "open" || !carrera.close_at) continue;
+    const cierre = Date.parse(carrera.close_at);
+    if (Number.isFinite(cierre) && cierre > ahora && cierre < cierreCercano) {
+      cercana = carrera;
+      cierreCercano = cierre;
+    }
+  }
+  return cercana;
+}
 
 function CarrerasPage() {
   const qc = useQueryClient();
@@ -82,7 +104,7 @@ function CarrerasPage() {
 
   const allRaces = racesQ.data ?? [];
   const races = fecha ? allRaces.filter((r) => r.race_date === fecha) : allRaces;
-  const race = races.find((r) => r.id === raceId) ?? races[0] ?? null;
+  const race = seleccionarCarreraPorCierre(races, raceId);
 
   const cerrandoRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -232,7 +254,7 @@ function CarrerasPage() {
           <AppNav title="Carreras" />
 
           {/* Accesos rápidos */}
-          <div className="mb-3 grid grid-cols-2 sm:grid-cols-5 gap-2">
+          <div className="mb-3 grid grid-cols-2 sm:grid-cols-6 gap-2">
             <Button
               asChild
               size="sm"
@@ -261,6 +283,17 @@ function CarrerasPage() {
               variant="outline"
               className="gap-1.5 font-semibold text-xs h-10 border-[#00ff66]/30 bg-[#060a08] text-white hover:bg-zinc-900 hover:border-[#00ff66] active:scale-95 transition-all"
             >
+              <Link to="/remates">
+                <Flame className="h-4 w-4 text-orange-400" />
+                REMATES
+              </Link>
+            </Button>
+            <Button
+              asChild
+              size="sm"
+              variant="outline"
+              className="gap-1.5 font-semibold text-xs h-10 border-[#00ff66]/30 bg-[#060a08] text-white hover:bg-zinc-900 hover:border-[#00ff66] active:scale-95 transition-all"
+            >
               <Link to="/dividendos">
                 <Coins className="h-4 w-4 text-amber-400" />
                 DIVIDENDOS
@@ -281,7 +314,7 @@ function CarrerasPage() {
               asChild
               size="sm"
               variant="outline"
-              className="gap-1.5 font-semibold text-xs h-10 border-[#00ff66]/30 bg-[#060a08] text-white hover:bg-zinc-900 hover:border-[#00ff66] active:scale-95 transition-all col-span-2 sm:col-span-1"
+              className="gap-1.5 font-semibold text-xs h-10 border-[#00ff66]/30 bg-[#060a08] text-white hover:bg-zinc-900 hover:border-[#00ff66] active:scale-95 transition-all"
             >
               <Link to="/retrospectos">
                 <FileText className="h-4 w-4 text-blue-400" />
@@ -378,6 +411,7 @@ function CarrerasPage() {
                 onChange={(e) => setRaceId(e.target.value)}
                 className="h-12 w-full rounded-xl border border-zinc-800 bg-black/90 px-3 text-sm normal-case tracking-normal text-white focus:border-[#00ff66] focus:ring-1 focus:ring-[#00ff66]"
               >
+                {!race && <option value="" disabled>Seleccionar carrera</option>}
                 {races.map((r) => (
                   <option key={r.id} value={r.id} className="bg-black text-white">
                     {r.track} · {r.race_number}ª {r.premio_tabla ? `(Val: ${bs(r.premio_tabla)})` : ""}
