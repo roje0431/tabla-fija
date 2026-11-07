@@ -15,7 +15,7 @@ export const Route = createFileRoute("/_authenticated/dividendos")({
   head: () => ({
     meta: [
       { title: "Configurar Dividendos — Tabla Fija" },
-      { name: "description", content: "Dividendos y porcentajes por hipódromo." },
+      { name: "description", content: "Dividendos y porcentajes por hipódromo para Win, Place y Show." },
     ],
   }),
   component: ConfigPage,
@@ -52,8 +52,19 @@ function ConfigPage() {
   const [minCorren, setMinCorren] = useState<string>("");
   const [adicionalGen, setAdicionalGen] = useState<string>("");
 
-  // Filas de la tabla WIN (1 a 5)
-  const [rows, setRows] = useState<ReglaDividendoRow[]>(
+  // Filas para PLACE (1 a 5) -> DESDEP, HASTAP, FIJOP, ADICIONALP, DIVFIJOP
+  const [rowsPlace, setRowsPlace] = useState<ReglaDividendoRow[]>(
+    Array.from({ length: 5 }, () => ({
+      desde: "",
+      hasta: "",
+      divfijo: "",
+      fijo: "",
+      adicional: "",
+    }))
+  );
+
+  // Filas para SHOW (1 a 5) -> DESDES, HASTAS, FIJOS, ADICIONALS, DIVFIJOS
+  const [rowsShow, setRowsShow] = useState<ReglaDividendoRow[]>(
     Array.from({ length: 5 }, () => ({
       desde: "",
       hasta: "",
@@ -86,13 +97,19 @@ function ConfigPage() {
     setDivMaximo(String(actual.divmax ?? 140.00));
   }, [actual]);
 
-  const handleRowChange = (index: number, field: keyof ReglaDividendoRow, value: string) => {
-    const updated = [...rows];
+  const handlePlaceChange = (index: number, field: keyof ReglaDividendoRow, value: string) => {
+    const updated = [...rowsPlace];
     updated[index] = { ...updated[index], [field]: value };
-    setRows(updated);
+    setRowsPlace(updated);
   };
 
-  // Cargar reglas de dividendos directamente desde la tabla "dividendos" en Supabase
+  const handleShowChange = (index: number, field: keyof ReglaDividendoRow, value: string) => {
+    const updated = [...rowsShow];
+    updated[index] = { ...updated[index], [field]: value };
+    setRowsShow(updated);
+  };
+
+  // Cargar reglas de dividendos PLACE y SHOW desde la tabla "dividendos" en Supabase[cite: 10]
   const handleHipodromoChange = async (idhip: string) => {
     setSelectedHip(idhip);
     const emptyRows = Array.from({ length: 5 }, () => ({
@@ -104,43 +121,58 @@ function ConfigPage() {
     }));
 
     if (!idhip) {
-      setRows(emptyRows);
+      setRowsPlace(emptyRows);
+      setRowsShow(emptyRows);
       return;
     }
 
     try {
       const { data, error } = await supabase
         .from("dividendos")
-        .select("*")
+        .select("DESDEP, HASTAP, FIJOP, ADICIONALP, DIVFIJOP, DESDES, HASTAS, FIJOS, ADICIONALS, DIVFIJOS")
         .eq("idhip", idhip);
 
       if (error) throw error;
 
       if (!data || data.length === 0) {
-        setRows(emptyRows);
+        setRowsPlace(emptyRows);
+        setRowsShow(emptyRows);
         return;
       }
 
-      const newRows = [...emptyRows];
+      const newPlace = [...emptyRows];
+      const newShow = [...emptyRows];
+
       data.forEach((regla: any, idx: number) => {
         if (idx < 5) {
-          newRows[idx] = {
-            desde: regla.desde?.toString() || "",
-            hasta: regla.hasta?.toString() || "",
-            divfijo: regla.divfijo?.toString() || "",
-            fijo: regla.fijo?.toString() || "",
-            adicional: regla.adicional?.toString() || "",
+          // Mapeo para PLACE
+          newPlace[idx] = {
+            desde: regla.DESDEP?.toString() || "",
+            hasta: regla.HASTAP?.toString() || "",
+            divfijo: regla.DIVFIJOP?.toString() || "",
+            fijo: regla.FIJOP?.toString() || "",
+            adicional: regla.ADICIONALP?.toString() || "",
+          };
+          // Mapeo para SHOW
+          newShow[idx] = {
+            desde: regla.DESDES?.toString() || "",
+            hasta: regla.HASTAS?.toString() || "",
+            divfijo: regla.DIVFIJOS?.toString() || "",
+            fijo: regla.FIJOS?.toString() || "",
+            adicional: regla.ADICIONALS?.toString() || "",
           };
         }
       });
-      setRows(newRows);
+
+      setRowsPlace(newPlace);
+      setRowsShow(newShow);
     } catch (e) {
       console.error(e);
       toast.error("Error al cargar los dividendos del hipódromo.");
     }
   };
 
-  // Mutación para guardar directamente en Supabase
+  // Mutación para guardar PLACE y SHOW en Supabase[cite: 10]
   const saveMutation = useMutation({
     mutationFn: async () => {
       const { error: hipError } = await supabase
@@ -161,17 +193,33 @@ function ConfigPage() {
 
       if (deleteError) throw deleteError;
 
-      const validRows = rows
-        .filter((r) => r.desde !== "")
-        .map((r) => ({
-          idhip: selectedHip,
-          idage: 1,
-          desde: parseFloat(r.desde) || 0,
-          hasta: parseFloat(r.hasta) || 0,
-          divfijo: parseFloat(r.divfijo) || 0,
-          fijo: parseFloat(r.fijo) || 0,
-          adicional: parseFloat(r.adicional) || 0,
-        }));
+      // Combinar filas de Place y Show basándose en el índice máximo ingresado
+      const maxRows = Math.max(rowsPlace.length, rowsShow.length);
+      const validRows = [];
+
+      for (let i = 0; i < maxRows; i++) {
+        const p = rowsPlace[i] || { desde: "", hasta: "", divfijo: "", fijo: "", adicional: "" };
+        const s = rowsShow[i] || { desde: "", hasta: "", divfijo: "", fijo: "", adicional: "" };
+
+        if (p.desde !== "" || s.desde !== "") {
+          validRows.push({
+            idhip: selectedHip,
+            idage: 1,
+            // Campos PLACE
+            DESDEP: parseFloat(p.desde) || 0,
+            HASTAP: parseFloat(p.hasta) || 0,
+            DIVFIJOP: parseFloat(p.divfijo) || 0,
+            FIJOP: parseFloat(p.fijo) || 0,
+            ADICIONALP: parseFloat(p.adicional) || 0,
+            // Campos SHOW
+            DESDES: parseFloat(s.desde) || 0,
+            HASTAS: parseFloat(s.hasta) || 0,
+            DIVFIJOS: parseFloat(s.divfijo) || 0,
+            FIJOS: parseFloat(s.fijo) || 0,
+            ADICIONALS: parseFloat(s.adicional) || 0,
+          });
+        }
+      }
 
       if (validRows.length > 0) {
         const { error: insertError } = await supabase
@@ -183,7 +231,7 @@ function ConfigPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["dividendos-hipodromos"] });
-      toast.success("Configuración Guardada: Datos actualizados con éxito en Supabase.");
+      toast.success("Configuración Guardada: Datos de Place y Show actualizados con éxito.");
     },
     onError: (e: Error) => toast.error(e.message || "Error al procesar la solicitud."),
   });
@@ -206,7 +254,7 @@ function ConfigPage() {
             <ArrowLeft className="w-4 h-4 mr-1.5 text-[#00ff66]" /> VOLVER A CARRERAS
           </Button>
           <span className="text-xs sm:text-sm text-[#00ff66] font-black uppercase tracking-wider">
-            Config. Dividendos
+            Config. Dividendos (Place / Show)
           </span>
         </div>
 
@@ -324,10 +372,11 @@ function ConfigPage() {
             </div>
           </div>
 
-          {/* Tabla de Rangos WIN con Scroll Horizontal Móvil */}
+          {/* Tabla de Rangos PLACE */}
           <div className="rounded-2xl border border-[#00ff66]/30 bg-[#060a08] p-4 sm:p-5 shadow-[0_0_25px_rgba(0,255,102,0.08)]">
-            <div className="border-b border-zinc-800 pb-2 mb-3">
-              <span className="text-xs font-black text-[#00ff66] uppercase tracking-wider">Rangos de Dividendos (WIN)</span>
+            <div className="border-b border-zinc-800 pb-2 mb-3 flex items-center justify-between">
+              <span className="text-xs font-black text-[#00ff66] uppercase tracking-wider">Rangos de Dividendos (PLACE)</span>
+              <span className="text-[10px] text-zinc-400 font-mono">DESDEP, HASTAP, FIJOP...</span>
             </div>
 
             <div className="overflow-x-auto -mx-1 px-1">
@@ -335,16 +384,16 @@ function ConfigPage() {
                 <thead>
                   <tr className="border-b border-zinc-800 text-zinc-400">
                     <th className="py-2 px-1 w-[6%]">N°</th>
-                    <th className="py-2 px-1 w-[19%]">Desde</th>
-                    <th className="py-2 px-1 w-[19%]">Hasta</th>
-                    <th className="py-2 px-1 w-[20%] text-[#00ff66]">Tope (DivFijo)</th>
-                    <th className="py-2 px-1 w-[18%]">Monto Fijo</th>
-                    <th className="py-2 px-1 w-[18%]">Adicional %</th>
+                    <th className="py-2 px-1 w-[19%]">Desde (P)</th>
+                    <th className="py-2 px-1 w-[19%]">Hasta (P)</th>
+                    <th className="py-2 px-1 w-[20%] text-[#00ff66]">Tope (DivFijo P)</th>
+                    <th className="py-2 px-1 w-[18%]">Monto Fijo (P)</th>
+                    <th className="py-2 px-1 w-[18%]">Adicional % (P)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/60">
-                  {rows.map((row, i) => (
-                    <tr key={`win-${i}`}>
+                  {rowsPlace.map((row, i) => (
+                    <tr key={`place-${i}`}>
                       <td className="font-bold text-zinc-500 py-2">{i + 1}</td>
                       <td className="py-2 px-1">
                         <Input
@@ -352,7 +401,7 @@ function ConfigPage() {
                           step="0.01"
                           className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
                           value={row.desde}
-                          onChange={(e) => handleRowChange(i, "desde", e.target.value)}
+                          onChange={(e) => handlePlaceChange(i, "desde", e.target.value)}
                         />
                       </td>
                       <td className="py-2 px-1">
@@ -361,7 +410,7 @@ function ConfigPage() {
                           step="0.01"
                           className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
                           value={row.hasta}
-                          onChange={(e) => handleRowChange(i, "hasta", e.target.value)}
+                          onChange={(e) => handlePlaceChange(i, "hasta", e.target.value)}
                         />
                       </td>
                       <td className="py-2 px-1">
@@ -370,7 +419,7 @@ function ConfigPage() {
                           step="0.01"
                           className="h-10 bg-black border-[#00ff66]/50 text-[#00ff66] font-bold text-right focus:border-[#00ff66] rounded-xl shadow-[0_0_10px_rgba(0,255,102,0.1)]"
                           value={row.divfijo}
-                          onChange={(e) => handleRowChange(i, "divfijo", e.target.value)}
+                          onChange={(e) => handlePlaceChange(i, "divfijo", e.target.value)}
                         />
                       </td>
                       <td className="py-2 px-1">
@@ -379,7 +428,7 @@ function ConfigPage() {
                           step="0.01"
                           className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
                           value={row.fijo}
-                          onChange={(e) => handleRowChange(i, "fijo", e.target.value)}
+                          onChange={(e) => handlePlaceChange(i, "fijo", e.target.value)}
                         />
                       </td>
                       <td className="py-2 px-1">
@@ -388,7 +437,7 @@ function ConfigPage() {
                           step="0.01"
                           className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
                           value={row.adicional}
-                          onChange={(e) => handleRowChange(i, "adicional", e.target.value)}
+                          onChange={(e) => handlePlaceChange(i, "adicional", e.target.value)}
                         />
                       </td>
                     </tr>
@@ -396,9 +445,80 @@ function ConfigPage() {
                 </tbody>
               </table>
             </div>
+          </div>
 
-            <div className="text-center mt-3 text-zinc-500 text-[10px] uppercase">
-              LLENE LOS DATOS Y CONFIGURE HASTA 5 RANGOS PARA SUS DIVIDENDOS
+          {/* Tabla de Rangos SHOW */}
+          <div className="rounded-2xl border border-[#00ff66]/30 bg-[#060a08] p-4 sm:p-5 shadow-[0_0_25px_rgba(0,255,102,0.08)]">
+            <div className="border-b border-zinc-800 pb-2 mb-3 flex items-center justify-between">
+              <span className="text-xs font-black text-[#00ff66] uppercase tracking-wider">Rangos de Dividendos (SHOW)</span>
+              <span className="text-[10px] text-zinc-400 font-mono">DESDES, HASTAS, FIJOS...</span>
+            </div>
+
+            <div className="overflow-x-auto -mx-1 px-1">
+              <table className="w-full text-center align-middle border-collapse min-w-[500px] text-xs">
+                <thead>
+                  <tr className="border-b border-zinc-800 text-zinc-400">
+                    <th className="py-2 px-1 w-[6%]">N°</th>
+                    <th className="py-2 px-1 w-[19%]">Desde (S)</th>
+                    <th className="py-2 px-1 w-[19%]">Hasta (S)</th>
+                    <th className="py-2 px-1 w-[20%] text-[#00ff66]">Tope (DivFijo S)</th>
+                    <th className="py-2 px-1 w-[18%]">Monto Fijo (S)</th>
+                    <th className="py-2 px-1 w-[18%]">Adicional % (S)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/60">
+                  {rowsShow.map((row, i) => (
+                    <tr key={`show-${i}`}>
+                      <td className="font-bold text-zinc-500 py-2">{i + 1}</td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
+                          value={row.desde}
+                          onChange={(e) => handleShowChange(i, "desde", e.target.value)}
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
+                          value={row.hasta}
+                          onChange={(e) => handleShowChange(i, "hasta", e.target.value)}
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-[#00ff66]/50 text-[#00ff66] font-bold text-right focus:border-[#00ff66] rounded-xl shadow-[0_0_10px_rgba(0,255,102,0.1)]"
+                          value={row.divfijo}
+                          onChange={(e) => handleShowChange(i, "divfijo", e.target.value)}
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
+                          value={row.fijo}
+                          onChange={(e) => handleShowChange(i, "fijo", e.target.value)}
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
+                          value={row.adicional}
+                          onChange={(e) => handleShowChange(i, "adicional", e.target.value)}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 
