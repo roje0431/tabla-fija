@@ -52,26 +52,19 @@ function ConfigPage() {
   const [minCorren, setMinCorren] = useState<string>("");
   const [adicionalGen, setAdicionalGen] = useState<string>("");
 
-  // Filas para PLACE (1 a 5) -> DESDEP, HASTAP, FIJOP, ADICIONALP, DIVFIJOP
-  const [rowsPlace, setRowsPlace] = useState<ReglaDividendoRow[]>(
-    Array.from({ length: 5 }, () => ({
-      desde: "",
-      hasta: "",
-      divfijo: "",
-      fijo: "",
-      adicional: "",
-    }))
+  // 1. Rangos WIN (desde, hasta, divfijo, fijo, adicional)
+  const [rowsWin, setRowsWin] = useState<ReglaDividendoRow[]>(
+    Array.from({ length: 5 }, () => ({ desde: "", hasta: "", divfijo: "", fijo: "", adicional: "" }))
   );
 
-  // Filas para SHOW (1 a 5) -> DESDES, HASTAS, FIJOS, ADICIONALS, DIVFIJOS
+  // 2. Rangos PLACE (DESDEP, HASTAP, DIVFIJOP, FIJOP, ADICIONALP)
+  const [rowsPlace, setRowsPlace] = useState<ReglaDividendoRow[]>(
+    Array.from({ length: 5 }, () => ({ desde: "", hasta: "", divfijo: "", fijo: "", adicional: "" }))
+  );
+
+  // 3. Rangos SHOW (DESDES, HASTAS, DIVFIJOS, FIJOS, ADICIONALS)
   const [rowsShow, setRowsShow] = useState<ReglaDividendoRow[]>(
-    Array.from({ length: 5 }, () => ({
-      desde: "",
-      hasta: "",
-      divfijo: "",
-      fijo: "",
-      adicional: "",
-    }))
+    Array.from({ length: 5 }, () => ({ desde: "", hasta: "", divfijo: "", fijo: "", adicional: "" }))
   );
 
   // Consulta de hipódromos usando Supabase
@@ -97,6 +90,12 @@ function ConfigPage() {
     setDivMaximo(String(actual.divmax ?? 140.00));
   }, [actual]);
 
+  const handleWinChange = (index: number, field: keyof ReglaDividendoRow, value: string) => {
+    const updated = [...rowsWin];
+    updated[index] = { ...updated[index], [field]: value };
+    setRowsWin(updated);
+  };
+
   const handlePlaceChange = (index: number, field: keyof ReglaDividendoRow, value: string) => {
     const updated = [...rowsPlace];
     updated[index] = { ...updated[index], [field]: value };
@@ -109,7 +108,7 @@ function ConfigPage() {
     setRowsShow(updated);
   };
 
-  // Cargar reglas de dividendos PLACE y SHOW desde la tabla "dividendos" en Supabase[cite: 10]
+  // Cargar reglas WIN, PLACE y SHOW directamente usando select("*") de Supabase
   const handleHipodromoChange = async (idhip: string) => {
     setSelectedHip(idhip);
     const emptyRows = Array.from({ length: 5 }, () => ({
@@ -121,6 +120,7 @@ function ConfigPage() {
     }));
 
     if (!idhip) {
+      setRowsWin(emptyRows);
       setRowsPlace(emptyRows);
       setRowsShow(emptyRows);
       return;
@@ -129,41 +129,52 @@ function ConfigPage() {
     try {
       const { data, error } = await supabase
         .from("dividendos")
-        .select("DESDEP, HASTAP, FIJOP, ADICIONALP, DIVFIJOP, DESDES, HASTAS, FIJOS, ADICIONALS, DIVFIJOS")
+        .select("*")
         .eq("idhip", idhip);
 
       if (error) throw error;
 
       if (!data || data.length === 0) {
+        setRowsWin(emptyRows);
         setRowsPlace(emptyRows);
         setRowsShow(emptyRows);
         return;
       }
 
+      const newWin = [...emptyRows];
       const newPlace = [...emptyRows];
       const newShow = [...emptyRows];
 
       data.forEach((regla: any, idx: number) => {
         if (idx < 5) {
-          // Mapeo para PLACE
-          newPlace[idx] = {
-            desde: regla.DESDEP?.toString() || "",
-            hasta: regla.HASTAP?.toString() || "",
-            divfijo: regla.DIVFIJOP?.toString() || "",
-            fijo: regla.FIJOP?.toString() || "",
-            adicional: regla.ADICIONALP?.toString() || "",
+          // Mapeo WIN
+          newWin[idx] = {
+            desde: regla.desde?.toString() || "",
+            hasta: regla.hasta?.toString() || "",
+            divfijo: regla.divfijo?.toString() || "",
+            fijo: regla.fijo?.toString() || "",
+            adicional: regla.adicional?.toString() || "",
           };
-          // Mapeo para SHOW
+          // Mapeo PLACE (soporta minúsculas o mayúsculas de PostgreSQL)
+          newPlace[idx] = {
+            desde: (regla.desdep ?? regla.DESDEP ?? "")?.toString(),
+            hasta: (regla.hastap ?? regla.HASTAP ?? "")?.toString(),
+            divfijo: (regla.divfijop ?? regla.DIVFIJOP ?? "")?.toString(),
+            fijo: (regla.fijop ?? regla.FIJOP ?? "")?.toString(),
+            adicional: (regla.adicionalp ?? regla.ADICIONALP ?? "")?.toString(),
+          };
+          // Mapeo SHOW (soporta minúsculas o mayúsculas de PostgreSQL)
           newShow[idx] = {
-            desde: regla.DESDES?.toString() || "",
-            hasta: regla.HASTAS?.toString() || "",
-            divfijo: regla.DIVFIJOS?.toString() || "",
-            fijo: regla.FIJOS?.toString() || "",
-            adicional: regla.ADICIONALS?.toString() || "",
+            desde: (regla.desdes ?? regla.DESDES ?? "")?.toString(),
+            hasta: (regla.hastas ?? regla.HASTAS ?? "")?.toString(),
+            divfijo: (regla.divfijos ?? regla.DIVFIJOS ?? "")?.toString(),
+            fijo: (regla.fijos ?? regla.FIJOS ?? "")?.toString(),
+            adicional: (regla.adicionals ?? regla.ADICIONALS ?? "")?.toString(),
           };
         }
       });
 
+      setRowsWin(newWin);
       setRowsPlace(newPlace);
       setRowsShow(newShow);
     } catch (e) {
@@ -172,7 +183,7 @@ function ConfigPage() {
     }
   };
 
-  // Mutación para guardar PLACE y SHOW en Supabase[cite: 10]
+  // Mutación para guardar WIN, PLACE y SHOW en la tabla dividendos
   const saveMutation = useMutation({
     mutationFn: async () => {
       const { error: hipError } = await supabase
@@ -193,30 +204,34 @@ function ConfigPage() {
 
       if (deleteError) throw deleteError;
 
-      // Combinar filas de Place y Show basándose en el índice máximo ingresado
-      const maxRows = Math.max(rowsPlace.length, rowsShow.length);
       const validRows = [];
-
-      for (let i = 0; i < maxRows; i++) {
+      for (let i = 0; i < 5; i++) {
+        const w = rowsWin[i] || { desde: "", hasta: "", divfijo: "", fijo: "", adicional: "" };
         const p = rowsPlace[i] || { desde: "", hasta: "", divfijo: "", fijo: "", adicional: "" };
         const s = rowsShow[i] || { desde: "", hasta: "", divfijo: "", fijo: "", adicional: "" };
 
-        if (p.desde !== "" || s.desde !== "") {
+        if (w.desde !== "" || p.desde !== "" || s.desde !== "") {
           validRows.push({
             idhip: selectedHip,
             idage: 1,
+            // Campos WIN
+            desde: parseFloat(w.desde) || 0,
+            hasta: parseFloat(w.hasta) || 0,
+            divfijo: parseFloat(w.divfijo) || 0,
+            fijo: parseFloat(w.fijo) || 0,
+            adicional: parseFloat(w.adicional) || 0,
             // Campos PLACE
-            DESDEP: parseFloat(p.desde) || 0,
-            HASTAP: parseFloat(p.hasta) || 0,
-            DIVFIJOP: parseFloat(p.divfijo) || 0,
-            FIJOP: parseFloat(p.fijo) || 0,
-            ADICIONALP: parseFloat(p.adicional) || 0,
+            desdep: parseFloat(p.desde) || 0,
+            hastap: parseFloat(p.hasta) || 0,
+            divfijop: parseFloat(p.divfijo) || 0,
+            fijop: parseFloat(p.fijo) || 0,
+            adicionalp: parseFloat(p.adicional) || 0,
             // Campos SHOW
-            DESDES: parseFloat(s.desde) || 0,
-            HASTAS: parseFloat(s.hasta) || 0,
-            DIVFIJOS: parseFloat(s.divfijo) || 0,
-            FIJOS: parseFloat(s.fijo) || 0,
-            ADICIONALS: parseFloat(s.adicional) || 0,
+            desdes: parseFloat(s.desde) || 0,
+            hastas: parseFloat(s.hasta) || 0,
+            divfijos: parseFloat(s.divfijo) || 0,
+            fijos: parseFloat(s.fijo) || 0,
+            adicionals: parseFloat(s.adicional) || 0,
           });
         }
       }
@@ -231,7 +246,7 @@ function ConfigPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["dividendos-hipodromos"] });
-      toast.success("Configuración Guardada: Datos de Place y Show actualizados con éxito.");
+      toast.success("Configuración Guardada: WIN, PLACE y SHOW actualizados con éxito.");
     },
     onError: (e: Error) => toast.error(e.message || "Error al procesar la solicitud."),
   });
@@ -254,7 +269,7 @@ function ConfigPage() {
             <ArrowLeft className="w-4 h-4 mr-1.5 text-[#00ff66]" /> VOLVER A CARRERAS
           </Button>
           <span className="text-xs sm:text-sm text-[#00ff66] font-black uppercase tracking-wider">
-            Config. Dividendos (Place / Show)
+            Config. Dividendos
           </span>
         </div>
 
@@ -372,11 +387,84 @@ function ConfigPage() {
             </div>
           </div>
 
-          {/* Tabla de Rangos PLACE */}
+          {/* 1. TABLA RANGOS WIN */}
           <div className="rounded-2xl border border-[#00ff66]/30 bg-[#060a08] p-4 sm:p-5 shadow-[0_0_25px_rgba(0,255,102,0.08)]">
-            <div className="border-b border-zinc-800 pb-2 mb-3 flex items-center justify-between">
+            <div className="border-b border-zinc-800 pb-2 mb-3">
+              <span className="text-xs font-black text-[#00ff66] uppercase tracking-wider">Rangos de Dividendos (WIN)</span>
+            </div>
+
+            <div className="overflow-x-auto -mx-1 px-1">
+              <table className="w-full text-center align-middle border-collapse min-w-[500px] text-xs">
+                <thead>
+                  <tr className="border-b border-zinc-800 text-zinc-400">
+                    <th className="py-2 px-1 w-[6%]">N°</th>
+                    <th className="py-2 px-1 w-[19%]">Desde</th>
+                    <th className="py-2 px-1 w-[19%]">Hasta</th>
+                    <th className="py-2 px-1 w-[20%] text-[#00ff66]">Tope (DivFijo)</th>
+                    <th className="py-2 px-1 w-[18%]">Monto Fijo</th>
+                    <th className="py-2 px-1 w-[18%]">Adicional %</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/60">
+                  {rowsWin.map((row, i) => (
+                    <tr key={`win-${i}`}>
+                      <td className="font-bold text-zinc-500 py-2">{i + 1}</td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
+                          value={row.desde}
+                          onChange={(e) => handleWinChange(i, "desde", e.target.value)}
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
+                          value={row.hasta}
+                          onChange={(e) => handleWinChange(i, "hasta", e.target.value)}
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-[#00ff66]/50 text-[#00ff66] font-bold text-right focus:border-[#00ff66] rounded-xl shadow-[0_0_10px_rgba(0,255,102,0.1)]"
+                          value={row.divfijo}
+                          onChange={(e) => handleWinChange(i, "divfijo", e.target.value)}
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
+                          value={row.fijo}
+                          onChange={(e) => handleWinChange(i, "fijo", e.target.value)}
+                        />
+                      </td>
+                      <td className="py-2 px-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          className="h-10 bg-black border-zinc-800 text-white font-bold text-right focus:border-[#00ff66] rounded-xl"
+                          value={row.adicional}
+                          onChange={(e) => handleWinChange(i, "adicional", e.target.value)}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 2. TABLA RANGOS PLACE */}
+          <div className="rounded-2xl border border-[#00ff66]/30 bg-[#060a08] p-4 sm:p-5 shadow-[0_0_25px_rgba(0,255,102,0.08)]">
+            <div className="border-b border-zinc-800 pb-2 mb-3">
               <span className="text-xs font-black text-[#00ff66] uppercase tracking-wider">Rangos de Dividendos (PLACE)</span>
-              <span className="text-[10px] text-zinc-400 font-mono">DESDEP, HASTAP, FIJOP...</span>
             </div>
 
             <div className="overflow-x-auto -mx-1 px-1">
@@ -447,11 +535,10 @@ function ConfigPage() {
             </div>
           </div>
 
-          {/* Tabla de Rangos SHOW */}
+          {/* 3. TABLA RANGOS SHOW */}
           <div className="rounded-2xl border border-[#00ff66]/30 bg-[#060a08] p-4 sm:p-5 shadow-[0_0_25px_rgba(0,255,102,0.08)]">
-            <div className="border-b border-zinc-800 pb-2 mb-3 flex items-center justify-between">
+            <div className="border-b border-zinc-800 pb-2 mb-3">
               <span className="text-xs font-black text-[#00ff66] uppercase tracking-wider">Rangos de Dividendos (SHOW)</span>
-              <span className="text-[10px] text-zinc-400 font-mono">DESDES, HASTAS, FIJOS...</span>
             </div>
 
             <div className="overflow-x-auto -mx-1 px-1">
