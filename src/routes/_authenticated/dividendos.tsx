@@ -92,7 +92,7 @@ function ConfigPage() {
     setRows(updated);
   };
 
-  // Cargar reglas de dividendos directamente desde la tabla "dividendos" en Supabase usando DESDES, HASTAS, FIJOS, ADICIONALS, DIVFIJOS
+  // Cargar reglas de dividendos directamente desde la tabla "dividendos" en Supabase
   const handleHipodromoChange = async (idhip: string) => {
     setSelectedHip(idhip);
     const emptyRows = Array.from({ length: 5 }, () => ({
@@ -111,7 +111,7 @@ function ConfigPage() {
     try {
       const { data, error } = await supabase
         .from("dividendos")
-        .select("DESDES, HASTAS, FIJOS, ADICIONALS, DIVFIJOS")
+        .select("*")
         .eq("idhip", idhip);
 
       if (error) throw error;
@@ -125,11 +125,11 @@ function ConfigPage() {
       data.forEach((regla: any, idx: number) => {
         if (idx < 5) {
           newRows[idx] = {
-            desde: regla.DESDES?.toString() || "",
-            hasta: regla.HASTAS?.toString() || "",
-            divfijo: regla.DIVFIJOS?.toString() || "",
-            fijo: regla.FIJOS?.toString() || "",
-            adicional: regla.ADICIONALS?.toString() || "",
+            desde: regla.desde?.toString() || "",
+            hasta: regla.hasta?.toString() || "",
+            divfijo: regla.divfijo?.toString() || "",
+            fijo: regla.fijo?.toString() || "",
+            adicional: regla.adicional?.toString() || "",
           };
         }
       });
@@ -140,7 +140,7 @@ function ConfigPage() {
     }
   };
 
-  // Mutación para guardar directamente en Supabase usando DESDEP, HASTAP, FIJOP, ADICIONALP, DIVFIJOP
+  // Mutación para guardar directamente en Supabase
   const saveMutation = useMutation({
     mutationFn: async () => {
       const { error: hipError } = await supabase
@@ -166,11 +166,11 @@ function ConfigPage() {
         .map((r) => ({
           idhip: selectedHip,
           idage: 1,
-          DESDEP: parseFloat(r.desde) || 0,
-          HASTAP: parseFloat(r.hasta) || 0,
-          DIVFIJOP: parseFloat(r.divfijo) || 0,
-          FIJOP: parseFloat(r.fijo) || 0,
-          ADICIONALP: parseFloat(r.adicional) || 0,
+          desde: parseFloat(r.desde) || 0,
+          hasta: parseFloat(r.hasta) || 0,
+          divfijo: parseFloat(r.divfijo) || 0,
+          fijo: parseFloat(r.fijo) || 0,
+          adicional: parseFloat(r.adicional) || 0,
         }));
 
       if (validRows.length > 0) {
