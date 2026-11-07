@@ -14,8 +14,12 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/apuestas-hipicas")({
   head: () => ({ meta: [
-    { title: "Apuestas Hípicas Win — Tabla Fija Solutorres" },
-    { name: "description", content: "Selección de ejemplares y preparación de tickets ganador del programa hípico del día." },
+    { title: "Apuestas Hípicas Win, Place y Show — Tabla Fija Solutorres" },
+    { name: "description", content: "Venta de tickets Win, Place y Show con autorización del administrador." },
+    { property: "og:title", content: "Apuestas Hípicas — Win, Place y Show" },
+    { property: "og:description", content: "Venta de tickets hípicos con modalidades autorizadas por el administrador." },
+    { property: "og:type", content: "website" },
+    { name: "twitter:card", content: "summary" },
   ] }),
   component: ApuestasHipicasPage,
 });
@@ -88,7 +92,8 @@ function todayISO() {
 }
 
 type Ejemplar = { nroejem: string | null; nombreeje: string | null; ret_ok: boolean | null; bloquea_ok: boolean | null; div_fijo: number | null };
-type Linea = { id: string; idprog: number; idhip: string; hip: string; carrera: number; nro: string; nombre: string; monto: number };
+type Modalidad = "win" | "place" | "show";
+type Linea = { modalidad: Modalidad; id: string; idprog: number; idhip: string; hip: string; carrera: number; nro: string; nombre: string; monto: number };
 
 function ApuestasHipicasPage() {
   const navigate = useNavigate();
@@ -112,6 +117,27 @@ function ApuestasHipicasPage() {
   const [idprog, setIdprog] = useState<number | null>(null);
   const [caballo, setCaballo] = useState<Ejemplar | null>(null);
   const [monto, setMonto] = useState("");
+  const [modalidad, setModalidad] = useState<Modalidad>("win");
+  const modalidadesQuery = useQuery({
+    queryKey: ["configuracion-modalidades"],
+    refetchInterval: 15000,
+    queryFn: async () => {
+      const { data, error } = await supabase.from("configuracion_modalidades").select("vender_place, vender_show").eq("id", true).maybeSingle();
+      if (error) throw error;
+      return data ?? { vender_place: false, vender_show: false };
+    },
+  });
+  const ventas = modalidadesQuery.data ?? { vender_place: false, vender_show: false };
+  const modalidadPermitida = modalidad === "win" || (modalidad === "place" ? ventas.vender_place : ventas.vender_show);
+  useEffect(() => { if (!modalidadPermitida) setModalidad("win"); }, [modalidadPermitida]);
+  const configurarMutation = useMutation({
+    mutationFn: async (valores: { vender_place: boolean; vender_show: boolean }) => {
+      const { error } = await supabase.rpc("configurar_modalidades", { _place: valores.vender_place, _show: valores.vender_show });
+      if (error) throw error;
+    },
+    onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["configuracion-modalidades"] }); toast.success("Modalidades actualizadas"); },
+    onError: (e: Error) => toast.error(e.message || "No se pudo guardar la configuración"),
+  });
   const [ticket, setTicket] = useState<Linea[]>([]);
   const [ticketModalData, setTicketModalData] = useState<{ nroTicket: string; fecha: string; hora: string; lineas: Linea[]; total: number; metodoPago: string } | null>(null);
 
@@ -229,7 +255,7 @@ function ApuestasHipicasPage() {
 
       const queryApuestas = supabase
         .from("apuestas_win")
-        .select("nroticket, fecha, carrera, nroejem, monto, status, monto_pagar, created_at, idhip, user_id")
+        .select("nroticket, fecha, carrera, nroejem, monto, status, monto_pagar, created_at, idhip, user_id, modalidad")
         .order("created_at", { ascending: false });
 
       if (!isAdmin) {
@@ -277,6 +303,7 @@ function ApuestasHipicasPage() {
         t.pagadoTotal += pagoLinea;
         t.lineas.push({
           hip: hipNombre,
+          modalidad: row.modalidad ?? "win",
           carrera: row.carrera,
           nro: row.nroejem,
           nombre: caballoNombre,
@@ -349,11 +376,11 @@ function ApuestasHipicasPage() {
   const montosSumar = esTipo1 ? [100, 500, 1000] : [cosBol, cosBol * 2, cosBol * 5];
 
   const enviarTicketWhatsApp = (ticketData: any) => {
-    let texto = `*TICKET HÍPICO WIN #${ticketData.nroTicket}*\n`;
+    let texto = `*TICKET HÍPICO #${ticketData.nroTicket}*\n`;
     texto += `Fecha: ${ticketData.fecha} - ${ticketData.hora}\n`;
     texto += `Método de Pago: ${ticketData.metodoPago.toUpperCase()}\n\n`;
     ticketData.lineas.forEach((l: any) => {
-      texto += `📌 ${l.hip} (${l.carrera}ª) -> #${l.nro} ${l.nombre}: Bs. ${fmt.format(l.monto)}\n`;
+      texto += `📌 ${l.hip} (${l.carrera}ª) ${(l.modalidad ?? "win").toUpperCase()} -> #${l.nro} ${l.nombre}: Bs. ${fmt.format(l.monto)}\n`;
     });
     texto += `\n*TOTAL: Bs. ${fmt.format(ticketData.total)}*`;
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(texto)}`;
@@ -479,6 +506,7 @@ function ApuestasHipicasPage() {
   const excederiaLimiteCaballo = totalCaballoConNuevo > limiteWinCaballo;
 
   function agregar() {
+    if (!modalidadPermitida) { toast.error("Esta modalidad no está habilitada por el administrador"); return; }
     if (carreraEstaCerrada) {
       toast.error("Esta carrera se encuentra cerrada / bloqueada para apuestas");
       return;
@@ -516,7 +544,8 @@ function ApuestasHipicasPage() {
       carrera: carreraSel.carrera, 
       nro: caballo.nroejem ?? "", 
       nombre: caballo.nombreeje ?? "", 
-      monto: montoNum 
+      monto: montoNum,
+      modalidad,
     }]);
     setCaballo(null);
     setMonto("");
@@ -570,6 +599,16 @@ function ApuestasHipicasPage() {
         throw new Error(`Saldo insuficiente. Tu saldo actual es Bs. ${fmt.format(saldoActual)} y el ticket es de Bs. ${fmt.format(total)}.`);
       }
 
+      if (ticket.some((l) => l.modalidad !== "win")) {
+        const nroTicket = crypto.randomUUID();
+        const { data: nuevoSaldo, error } = await supabase.rpc("registrar_ticket_modalidades", {
+          _lineas: ticket.map((l) => ({ idprog: l.idprog, idhip: l.idhip, carrera: l.carrera, nro: l.nro, monto: l.monto, modalidad: l.modalidad })),
+          _nroticket: nroTicket,
+          _fecha: fecha,
+        });
+        if (error) throw error;
+        return { nroTicket, fecha, hora: new Date().toLocaleTimeString(), lineas: [...ticket], total, nuevoSaldo, metodoPago };
+      }
       const nuevoSaldo = saldoActual - total;
       const nroTicket = Date.now().toString().slice(-8);
       const horaActual = new Date().toLocaleTimeString();
@@ -605,6 +644,7 @@ function ApuestasHipicasPage() {
         carrera: l.carrera,
         nroejem: l.nro,
         monto: l.monto,
+        modalidad: l.modalidad,
         user_id: userId,
       }));
 
@@ -744,7 +784,7 @@ function ApuestasHipicasPage() {
         <div>
           <h1 className="font-display text-2xl sm:text-3xl font-black text-white tracking-tight flex items-center gap-2">
             <span className="text-[#00ff66] drop-shadow-[0_0_8px_rgba(0,255,102,0.6)]">●</span>
-            Apuestas Hípicas (Win)
+            Apuestas Hípicas (Win / Place / Show)
           </h1>
           <p className="text-xs text-slate-400 mt-1">
             Selección directa de ejemplares ganadores y confirmación de tickets con descuento automático.
@@ -863,6 +903,29 @@ function ApuestasHipicasPage() {
             </div>
           </div>
         </div>
+
+        <section className="space-y-3 border-y border-border py-3" aria-label="Modalidades de apuesta">
+          {isAdmin && (
+            <fieldset disabled={configurarMutation.isPending || modalidadesQuery.isLoading || !!modalidadesQuery.error} className="space-y-2">
+              <legend className="text-sm font-bold">Venta de modalidades</legend>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <label className="flex min-h-11 items-center gap-3 text-sm">
+                  <input type="checkbox" className="h-5 w-5" checked={ventas.vender_place} onChange={(e) => configurarMutation.mutate({ ...ventas, vender_place: e.target.checked })} /> Permitir Place
+                </label>
+                <label className="flex min-h-11 items-center gap-3 text-sm">
+                  <input type="checkbox" className="h-5 w-5" checked={ventas.vender_show} onChange={(e) => configurarMutation.mutate({ ...ventas, vender_show: e.target.checked })} /> Permitir Show
+                </label>
+              </div>
+            </fieldset>
+          )}
+          {modalidadesQuery.error && <p role="alert" className="text-sm text-destructive">No se pudo consultar la autorización de Place y Show.</p>}
+          <div className="grid grid-cols-3 gap-2" role="group" aria-label="Tipo de apuesta">
+            {(["win", "place", "show"] as Modalidad[]).map((tipo) => {
+              const permitido = tipo === "win" || (tipo === "place" ? ventas.vender_place : ventas.vender_show);
+              return <Button key={tipo} type="button" variant={modalidad === tipo ? "default" : "outline"} className="h-11 min-w-0 px-1 text-sm" aria-pressed={modalidad === tipo} disabled={!permitido} title={permitido ? tipo.toUpperCase() : "Deshabilitado por el administrador"} onClick={() => setModalidad(tipo)}>{tipo.toUpperCase()}{!permitido && <Lock className="ml-1 h-3 w-3 shrink-0" />}</Button>;
+            })}
+          </div>
+        </section>
 
         <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_400px]">
           
@@ -995,7 +1058,7 @@ function ApuestasHipicasPage() {
                     <span className="min-w-0 break-words text-slate-100">
                       <b className="font-mono text-base text-[#00ff66]">#{caballo.nroejem}</b>{" "}
                       <span className="font-semibold">{caballo.nombreeje}</span> ·{" "}
-                      <span className="font-bold text-[#00ff66]">WIN (GANADOR)</span>
+                      <span className="font-bold text-[#00ff66]">{modalidad === "win" ? "WIN (GANADOR)" : modalidad.toUpperCase()}</span>
                     </span>
                     <Button
                       variant="ghost"
@@ -1114,7 +1177,7 @@ function ApuestasHipicasPage() {
                 size="lg"
                 className="w-full h-11 bg-[#00ff66]/20 hover:bg-[#00ff66]/30 text-[#00ff66] border border-[#00ff66]/60 font-bold tracking-wider transition-all disabled:opacity-40"
                 onClick={agregar}
-                disabled={carreraEstaCerrada || !caballo || !Number.isFinite(montoNum) || montoNum <= 0 || excederiaLimiteCarrera || excederiaLimiteCaballo}
+                disabled={!modalidadPermitida || carreraEstaCerrada || !caballo || !Number.isFinite(montoNum) || montoNum <= 0 || excederiaLimiteCarrera || excederiaLimiteCaballo}
               >
                 <Plus className="mr-1.5 h-4 w-4" /> AGREGAR AL TICKET
               </Button>
@@ -1126,7 +1189,7 @@ function ApuestasHipicasPage() {
                     className="flex items-center justify-between gap-2 rounded-lg bg-black/80 border border-[#00ff66]/20 px-3 py-2 text-xs"
                   >
                     <div className="min-w-0 break-words">
-                      <div className="font-bold text-[#00ff66]">{l.hip} · {l.carrera}ª · WIN</div>
+                      <div className="font-bold text-[#00ff66]">{l.hip} · {l.carrera}ª · {(l.modalidad ?? "win").toUpperCase()}</div>
                       <div className="text-slate-300">#{l.nro} {l.nombre}</div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
@@ -1240,7 +1303,7 @@ function ApuestasHipicasPage() {
                                   nroTicket: t.nroticket,
                                   fecha: t.fecha,
                                   hora: t.hora,
-                                  lineas: t.lineas.map(l => ({ id: crypto.randomUUID(), idprog: 0, idhip: t.idhip || "", hip: l.hip || "HÍPICO", carrera: l.carrera, nro: l.nro, nombre: l.nombre || `Ejemplar #${l.nro}`, monto: l.monto })),
+                                  lineas: t.lineas.map(l => ({ id: crypto.randomUUID(), idprog: 0, idhip: t.idhip || "", modalidad: l.modalidad ?? "win", hip: l.hip || "HÍPICO", carrera: l.carrera, nro: l.nro, nombre: l.nombre || `Ejemplar #${l.nro}`, monto: l.monto })),
                                   total: t.total,
                                   metodoPago: "saldo",
                                 })}
@@ -1286,9 +1349,9 @@ function ApuestasHipicasPage() {
       </div>
 
       {ticketModalData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto">
           <style>{`#print-section-ticket { -webkit-print-color-adjust: exact; print-color-adjust: exact; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }`}</style>
-          <div className="w-full max-w-md rounded-2xl bg-white text-black p-6 shadow-2xl space-y-4 font-mono">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl bg-white text-black p-6 shadow-2xl space-y-4 font-mono">
             
             <div className="flex items-center justify-between border-b pb-3 print:hidden">
               <div className="flex items-center gap-2 text-emerald-600 font-bold">
@@ -1305,10 +1368,10 @@ function ApuestasHipicasPage() {
               </Button>
             </div>
 
-            <div id="print-section-ticket" className="mx-auto w-[54mm] rounded-xl border border-neutral-500 bg-white p-3 space-y-2 text-[11px] leading-[1.18] tracking-[-0.01em] antialiased font-['Arial_Narrow','Roboto_Condensed','Liberation_Sans_Narrow',Arial,sans-serif]">
+            <div id="print-section-ticket" className="mx-auto w-[54mm] max-w-full rounded-xl border border-neutral-500 bg-white p-3 space-y-2 text-[11px] leading-[1.18] tracking-[-0.01em] antialiased font-['Arial_Narrow','Roboto_Condensed','Liberation_Sans_Narrow',Arial,sans-serif]">
               <div className="flex justify-between font-bold text-xs">
                 <span>TICKET:</span>
-                <span>{ticketModalData.nroTicket}</span>
+                <span className="min-w-0 break-all text-right">{ticketModalData.nroTicket}</span>
               </div>
               <div className="flex justify-between text-[10px] text-neutral-800 border-b border-neutral-400 pb-1.5">
                 <span>FECHA: {ticketModalData.fecha}</span>
@@ -1317,7 +1380,7 @@ function ApuestasHipicasPage() {
 
               <div className="text-center font-bold text-black tracking-tight py-0.5">
                 TABLA FIJA SOLUTORRES<br />
-                APUESTAS HÍPICAS (WIN)
+                APUESTAS HÍPICAS
               </div>
 
               <div className="text-[10px] font-bold text-center text-neutral-900 bg-neutral-200 py-0.5 rounded uppercase">
@@ -1328,7 +1391,7 @@ function ApuestasHipicasPage() {
                 {ticketModalData.lineas.map((l, idx) => (
                   <div key={idx} className="space-y-0.5 border-b border-neutral-300 pb-1 last:border-b-0 last:pb-0">
                     <div className="font-bold text-emerald-900 uppercase">
-                      📌 {l.hip} — {l.carrera}ª C.
+                      📌 {l.hip} — {l.carrera}ª C. · {(l.modalidad ?? "win").toUpperCase()}
                     </div>
                     <div className="flex justify-between items-start text-neutral-950 gap-1">
                       <span className="break-words">• #{l.nro} {l.nombre}</span>
