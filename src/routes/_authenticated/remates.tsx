@@ -16,7 +16,11 @@ export const Route = createFileRoute("/_authenticated/remates")({
   head: () => ({
     meta: [
       { title: "Gestión de Remates Hípicos" },
-      { name: "description", content: "Pizarra de remates adaptada a móvil con 4 tablas visibles, botón guardar por ejemplar y refresco manual." },
+      { name: "description", content: "Pizarra de remates de Tabla Fija con tablas configuradas por carrera y resultados hípicos." },
+      { property: "og:title", content: "Remates Hípicos | Tabla Fija" },
+      { property: "og:description", content: "Tablas de remates y resultados por carrera en Softhípico." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: RematesView,
@@ -44,6 +48,12 @@ function todayISO() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
   const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
   return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+export function tablasHabilitadas(cantidad: unknown): number[] {
+  const n = Number(cantidad);
+  const total = Number.isInteger(n) && n >= 1 && n <= 4 ? n : 4;
+  return Array.from({ length: total }, (_, i) => i + 1);
 }
 
 function RematesView() {
@@ -89,11 +99,12 @@ function RematesView() {
   const carrerasQuery = useQuery({
     enabled: !!hip,
     queryKey: ["remates-carreras", hip, fecha],
+    refetchInterval: 15000,
     queryFn: async () => {
       if (!hip) return [];
       const { data: progData, error: progErr } = await supabase
         .from("programa")
-        .select("idprog, carrera, hora, bloquea_ok, remate_cerrado, remate_ganador")
+        .select("idprog, carrera, hora, bloquea_ok, remate_cerrado, remate_ganador, remate_tablas")
         .eq("idhip", hip)
         .eq("fecha", fecha)
         .order("carrera");
@@ -108,6 +119,7 @@ function RematesView() {
         race_date: fecha,
         remate_cerrado: !!(p as any).remate_cerrado,
         remate_ganador: (p as any).remate_ganador ?? null,
+        remate_tablas: p.remate_tablas,
       })) as Race[];
     },
   });
@@ -116,6 +128,9 @@ function RematesView() {
   const hipSeleccionado = hipodromos.find((h) => h.idhip === hip);
   const porcRetRem = Math.min(100, Math.max(0, Number((hipSeleccionado as any)?.porc_ret_rem) || 0));
   const carreraSeleccionada = carreras.find((c) => String(c.id) === String(raceId));
+  const tablasVisibles = tablasHabilitadas((carreraSeleccionada as any)?.remate_tablas);
+  const cantidadTablas = tablasVisibles.length;
+  const columnasTablas = cantidadTablas === 1 ? "grid-cols-1" : cantidadTablas === 2 ? "grid-cols-2" : cantidadTablas === 3 ? "grid-cols-3" : "grid-cols-4";
   const remateCerrado = (carreraSeleccionada as any)?.remate_cerrado === true;
   const remateGanador: string | null = (carreraSeleccionada as any)?.remate_ganador ?? null;
   const carreraCerrada = carreraSeleccionada?.status === "closed" || (carreraSeleccionada as any)?.bloquea_ok === true || remateCerrado;
@@ -137,6 +152,20 @@ function RematesView() {
   });
   const isAdmin = rolQ.data?.isAdmin === true;
   const bloqueadoSinSaldo = !isAdmin && (rolQ.data?.sinSaldo ?? 0) >= 3;
+
+  const configurarTablasMutation = useMutation({
+    mutationFn: async ({ idprog, tablas }: { idprog: string; tablas: number }) => {
+      if (!isAdmin) throw new Error("Solo el administrador puede configurar las tablas del remate.");
+      const { data, error } = await supabase.rpc("configurar_remate_tablas", { _idprog: Number(idprog), _tablas: tablas });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["remates-carreras"] });
+      toast.success("Cantidad de tablas guardada.");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   const cerrarRemateMutation = useMutation({
     mutationFn: async () => {
@@ -256,9 +285,9 @@ function RematesView() {
 
     remates.forEach((r) => {
       const p1 = Number(r.precio1) || 0;
-      const p2 = Number(r.precio2) || 0;
-      const p3 = Number(r.precio3) || 0;
-      const p4 = Number(r.precio4) || 0;
+      const p2 = cantidadTablas >= 2 ? Number(r.precio2) || 0 : 0;
+      const p3 = cantidadTablas >= 3 ? Number(r.precio3) || 0 : 0;
+      const p4 = cantidadTablas >= 4 ? Number(r.precio4) || 0 : 0;
 
       t1 += p1;
       t2 += p2;
@@ -280,7 +309,7 @@ function RematesView() {
       montoJugadoUsuario: usuarioTotal,
       brutoTotal: t1 + t2 + t3 + t4,
     };
-  }, [remates, userName, porcRetRem]);
+  }, [remates, userName, porcRetRem, cantidadTablas]);
 
   // Mutación para guardar individualmente un solo remate (caballo)
   const guardarUnRemateMutation = useMutation({
@@ -305,15 +334,15 @@ function RematesView() {
         payload.precio1 = p1;
         payload.apostador1 = userName.toUpperCase();
       }
-      if (p2 !== Number(r.precio2)) {
+      if (cantidadTablas >= 2 && p2 !== Number(r.precio2)) {
         payload.precio2 = p2;
         payload.apostador2 = userName.toUpperCase();
       }
-      if (p3 !== Number(r.precio3)) {
+      if (cantidadTablas >= 3 && p3 !== Number(r.precio3)) {
         payload.precio3 = p3;
         payload.apostador3 = userName.toUpperCase();
       }
-      if (p4 !== Number(r.precio4)) {
+      if (cantidadTablas >= 4 && p4 !== Number(r.precio4)) {
         payload.precio4 = p4;
         payload.apostador4 = userName.toUpperCase();
       }
@@ -345,9 +374,9 @@ function RematesView() {
     texto += `📅 *Fecha:* ${fecha}\n\n`;
     texto += `💰 *TOTALES NETOS TABLAS:*\n`;
     texto += `T1: Bs. ${totalTabla1.toLocaleString("es-VE", { minimumFractionDigits: 2 })}\n`;
-    texto += `T2: Bs. ${totalTabla2.toLocaleString("es-VE", { minimumFractionDigits: 2 })}\n`;
-    texto += `T3: Bs. ${totalTabla3.toLocaleString("es-VE", { minimumFractionDigits: 2 })}\n`;
-    texto += `T4: Bs. ${totalTabla4.toLocaleString("es-VE", { minimumFractionDigits: 2 })}\n`;
+    if (cantidadTablas >= 2) texto += `T2: Bs. ${totalTabla2.toLocaleString("es-VE", { minimumFractionDigits: 2 })}\n`;
+    if (cantidadTablas >= 3) texto += `T3: Bs. ${totalTabla3.toLocaleString("es-VE", { minimumFractionDigits: 2 })}\n`;
+    if (cantidadTablas >= 4) texto += `T4: Bs. ${totalTabla4.toLocaleString("es-VE", { minimumFractionDigits: 2 })}\n`;
     texto += `----------------------------\n`;
     texto += `📋 *EJEMPLARES:*\n`;
 
@@ -357,9 +386,9 @@ function RematesView() {
       } else {
         texto += `#${r.numero} ${r.nombre}\n`;
         texto += `   T1: ${r.precio1 || 0} (${r.apostador1 || "CASA"})\n`;
-        texto += `   T2: ${r.precio2 || 0} (${r.apostador2 || "CASA"})\n`;
-        texto += `   T3: ${r.precio3 || 0} (${r.apostador3 || "CASA"})\n`;
-        texto += `   T4: ${r.precio4 || 0} (${r.apostador4 || "CASA"})\n`;
+        if (cantidadTablas >= 2) texto += `   T2: ${r.precio2 || 0} (${r.apostador2 || "CASA"})\n`;
+        if (cantidadTablas >= 3) texto += `   T3: ${r.precio3 || 0} (${r.apostador3 || "CASA"})\n`;
+        if (cantidadTablas >= 4) texto += `   T4: ${r.precio4 || 0} (${r.apostador4 || "CASA"})\n`;
       }
     });
 
@@ -424,7 +453,7 @@ function RematesView() {
               size="sm"
               className="h-9 gap-1.5 bg-black border-emerald-500/50 text-[#00ff66] hover:bg-emerald-950/60 font-bold text-xs shadow-[0_0_10px_rgba(0,255,102,0.15)]"
               disabled={isRefreshing}
-              onClick={() => rematesQ.refetch()}
+              onClick={() => { void rematesQ.refetch(); void carrerasQuery.refetch(); }}
             >
               <RefreshCw className={`h-3.5 w-3.5 text-[#00ff66] ${isRefreshing ? "animate-spin" : ""}`} />
               {isRefreshing ? "Refrescando..." : "Refrescar"}
@@ -522,6 +551,20 @@ function RematesView() {
               </select>
             </div>
           </div>
+          {isAdmin && carreraSeleccionada && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
+              <label htmlFor="remate-tablas" className="text-xs font-semibold text-foreground">Cantidad de tablas</label>
+              <select
+                id="remate-tablas"
+                value={cantidadTablas}
+                disabled={remateCerrado || configurarTablasMutation.isPending}
+                onChange={(e) => configurarTablasMutation.mutate({ idprog: raceId, tablas: Number(e.target.value) })}
+                className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground disabled:opacity-50"
+              >
+                {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} {n === 1 ? "tabla" : "tablas"}</option>)}
+              </select>
+            </div>
+          )}
           {carreraCerrada && (
             <div className="rounded-lg bg-rose-950/60 border border-rose-500/50 p-2 text-center text-[11px] font-bold text-rose-300 flex items-center justify-center gap-1.5">
               <Lock className="h-3.5 w-3.5" /> {remateCerrado ? "Remate cerrado." : "Carrera cerrada por el admin."} Solo lectura.
@@ -555,23 +598,13 @@ function RematesView() {
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-1.5 text-center">
-            <div className="rounded-lg bg-black border border-emerald-500/40 p-1.5 shadow-inner">
-              <span className="text-[8px] uppercase font-mono text-slate-400 block">TABLA 1</span>
-              <span className="font-display text-xs sm:text-sm font-black text-[#00ff66] truncate block">{totalTabla1.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</span>
-            </div>
-            <div className="rounded-lg bg-black border border-emerald-500/40 p-1.5 shadow-inner">
-              <span className="text-[8px] uppercase font-mono text-slate-400 block">TABLA 2</span>
-              <span className="font-display text-xs sm:text-sm font-black text-[#00ff66] truncate block">{totalTabla2.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</span>
-            </div>
-            <div className="rounded-lg bg-black border border-emerald-500/40 p-1.5 shadow-inner">
-              <span className="text-[8px] uppercase font-mono text-slate-400 block">TABLA 3</span>
-              <span className="font-display text-xs sm:text-sm font-black text-[#00ff66] truncate block">{totalTabla3.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</span>
-            </div>
-            <div className="rounded-lg bg-black border border-emerald-500/40 p-1.5 shadow-inner">
-              <span className="text-[8px] uppercase font-mono text-slate-400 block">TABLA 4</span>
-              <span className="font-display text-xs sm:text-sm font-black text-[#00ff66] truncate block">{totalTabla4.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</span>
-            </div>
+          <div className={`grid ${columnasTablas} gap-1.5 text-center`}>
+            {[totalTabla1, totalTabla2, totalTabla3, totalTabla4].slice(0, cantidadTablas).map((total, index) => (
+              <div key={index} className="rounded-lg bg-black border border-emerald-500/40 p-1.5 shadow-inner">
+                <span className="text-[8px] uppercase font-mono text-slate-400 block">TABLA {index + 1}</span>
+                <span className="font-display text-xs sm:text-sm font-black text-[#00ff66] truncate block">{total.toLocaleString("es-VE", { minimumFractionDigits: 2 })}</span>
+              </div>
+            ))}
           </div>
           <div className="text-center text-[10px] font-mono text-slate-400">
             Totales netos · Retención {porcRetRem.toLocaleString("es-VE")}% · Bruto Bs. {brutoTotal.toLocaleString("es-VE", { minimumFractionDigits: 2 })} · Retenido Bs. {(Math.round(brutoTotal * porcRetRem) / 100).toLocaleString("es-VE", { minimumFractionDigits: 2 })}
@@ -667,13 +700,13 @@ function RematesView() {
                   </div>
 
                   {/* Celdas de las 4 Tablas en Grid Móvil Compacto */}
-                  <div className="grid grid-cols-4 gap-1.5">
+                  <div className={`grid ${columnasTablas} gap-1.5`}>
                     {[
                       { campoPrecio: "precio1", campoApostador: "apostador1", val: loc.p1, key: "p1", label: "TABLA 1" },
                       { campoPrecio: "precio2", campoApostador: "apostador2", val: loc.p2, key: "p2", label: "TABLA 2" },
                       { campoPrecio: "precio3", campoApostador: "apostador3", val: loc.p3, key: "p3", label: "TABLA 3" },
                       { campoPrecio: "precio4", campoApostador: "apostador4", val: loc.p4, key: "p4", label: "TABLA 4" },
-                    ].map((tabla, idx) => {
+                    ].slice(0, cantidadTablas).map((tabla, idx) => {
                       const apostadorActual = (r as any)[tabla.campoApostador] || "CASA";
 
                       return (
